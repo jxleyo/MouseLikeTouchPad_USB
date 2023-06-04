@@ -1,0 +1,74 @@
+[Version]
+Signature   = "$WINDOWS NT$"
+Class = HIDClass
+ClassGuid = {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider    = %ProviderName%
+CatalogFile = MouseLikeTouchPad_UsbFilter.cat
+PnpLockdown=1
+DriverVer = 07/17/2023,1.2.3.4
+
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+MouseLikeTouchPad_UsbFilter.sys = 1,,
+
+[Manufacturer]
+%StdMfg%=Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%MouseLikeTouchPad_UsbFilter.DeviceDesc%=MouseLikeTouchPad_UsbFilter, USB\VID_048D&PID_8911&REV_0109&MI_01
+;%MouseLikeTouchPad_UsbFilter.DeviceDesc%=MouseLikeTouchPad_UsbFilter, USB\VID_1BCF&PID_0005&REV_0090
+
+
+
+[MouseLikeTouchPad_UsbFilter.NT]
+Include = INPUT.INF
+Needs = HID_Inst.NT
+CopyFiles=MouseLikeTouchPad_UsbFilter.NT.Copy
+
+[MouseLikeTouchPad_UsbFilter.NT.Copy]
+MouseLikeTouchPad_UsbFilter.sys
+
+[MouseLikeTouchPad_UsbFilter.NT.HW]
+Include = INPUT.INF
+Needs = HID_Inst.NT.HW
+AddReg = MouseLikeTouchPad_UsbFilter.NT.HW.AddReg
+
+
+[MouseLikeTouchPad_UsbFilter.NT.HW.AddReg]
+HKR,,"LowerFilters",0x00010000,"MouseLikeTouchPad_UsbFilter"
+
+
+[MouseLikeTouchPad_UsbFilter.NT.Services]
+;Do not specify SPSVCINST_ASSOCSERVICE on filter drivers.
+AddService      = MouseLikeTouchPad_UsbFilter,, filter_Service_Inst
+Include = INPUT.INF
+Needs = HID_Inst.NT.services
+
+[filter_Service_Inst]
+DisplayName     = %filter.SvcDesc%
+ServiceType     = 1                  ; SERVICE_KERNEL_DRIVER
+StartType       = 3                  ; SERVICE_DEMAND_START
+ErrorControl    = 1                  ; SERVICE_ERROR_NORMAL
+ServiceBinary   = %12%\MouseLikeTouchPad_UsbFilter.sys
+
+
+[MouseLikeTouchPad_UsbFilter.NT.Wdf]
+KmdfService              = MouseLikeTouchPad_UsbFilter, Filter_wdfsect
+
+[Filter_wdfsect]
+KmdfLibraryVersion = 1.9
+
+[Strings]
+SPSVCINST_ASSOCSERVICE   = 0x00000002
+ProviderName             = "jxleyo.HRP"
+StdMfg                   = "MouseLikeTouchPad_UsbFilter"
+ClassName                = "MouseLikeTouchPad"
+DiskName                  = "MouseLikeTouchPad_UsbFilter Installation Disk"
+MouseLikeTouchPad_UsbFilter.DeviceDesc = "MouseLikeTouchPad_UsbFilter"
+filter.SvcDesc           = "MouseLikeTouchPad_UsbFilter"
