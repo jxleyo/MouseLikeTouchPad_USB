@@ -1762,7 +1762,7 @@ NTSTATUS HumGetStringDescriptor(PDEVICE_OBJECT pDevObj, PIRP pIrp)
     }
     else
     {
-        if (IoControlCode != 0xB01E2) //XXX Undoc?
+        if (IoControlCode != IOCTL_HID_GET_INDEXED_STRING) //0xB01E2
         {
             pUserBuffer = NULL;
         }

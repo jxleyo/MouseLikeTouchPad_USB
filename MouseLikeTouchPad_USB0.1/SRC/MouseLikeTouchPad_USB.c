@@ -130,11 +130,11 @@ NTSTATUS HumInternalIoctl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
         goto ExitCompleteIrp;
     }
     case IOCTL_HID_GET_FEATURE: 
-    //{//新增代码
-    //    RegDebug(L"IOCTL_HID_GET_FEATURE", NULL, runtimes_IOCTL_IOCTL);
-    //    status = HumGetSetReport(pDevObj, pIrp, &NeedCompleteIrp);
-    //    goto ExitCheckNeedCompleteIrp;
-    //}
+    {//新增代码
+        RegDebug(L"IOCTL_HID_GET_FEATURE", NULL, runtimes_IOCTL_IOCTL);
+        status = HumGetSetReport(pDevObj, pIrp, &NeedCompleteIrp);
+        goto ExitCheckNeedCompleteIrp;
+    }
     case IOCTL_HID_SET_FEATURE:
     {
         RegDebug(L"IOCTL_HID_SET_FEATURE", NULL, runtimes_IOCTL_IOCTL);
@@ -1838,7 +1838,7 @@ NTSTATUS HumGetStringDescriptor(PDEVICE_OBJECT pDevObj, PIRP pIrp)
     }
     else
     {
-        if (IoControlCode != 0xB01E2) //XXX Undoc?
+        if (IoControlCode != IOCTL_HID_GET_INDEXED_STRING) //0xB01E2
         {
             pUserBuffer = NULL;
         }
