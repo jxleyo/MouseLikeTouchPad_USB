@@ -25,7 +25,7 @@ DefaultDestDir = 12
 %StdMfg%=Standard,NT$ARCH$
 
 [Standard.NT$ARCH$]
-%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_048D&PID_8911&REV_0109&MI_01;,GENERIC_HID_DEVICE,USB\Class_03&SubClass_01,USB\Class_03
+%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_048D&PID_8911&REV_1001&MI_01;,GENERIC_HID_DEVICE,USB\Class_03&SubClass_01,USB\Class_03
 ;%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_1BCF&PID_0005&REV_0090
 
 ;=====================================================================

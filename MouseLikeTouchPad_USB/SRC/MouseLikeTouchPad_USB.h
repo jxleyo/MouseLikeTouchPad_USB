@@ -33,6 +33,173 @@ typedef BYTE* PBYTE;
 
 const ULONG DEXT_NO_HID_DESC = 0x1;
 
+#define STABLE_INTERVAL_FingerSeparated_MSEC   20   // 手指分开按到触摸板的稳定时间间隔
+#define STABLE_INTERVAL_FingerClosed_MSEC      100   // 手指并拢按到触摸板的稳定时间间隔 
+
+#define MouseReport_INTERVAL_MSEC         8   // 鼠标报告间隔时间ms，以频率125hz为基准
+#define ButtonPointer_Interval_MSEC      150   // 鼠标左中右键与指针操作间隔时间ms，
+
+#define Jitter_Offset         10    // 修正触摸点轻微抖动的位移阈值
+
+#define SCROLL_OFFSET_THRESHOLD_X      100   // 滚动位移量X阈值 
+#define SCROLL_OFFSET_THRESHOLD_Y      100   // 滚动位移量Y阈值 
+
+
+
+CHAR UnitExponent_Table[16] = { 0,1,2,3,4,5,6,7,-8,-7,-6,-5,-4,-3,-2,1 };
+
+double MouseSensitivityTable[3] = { 0.8,1.0,1.25 };
+
+
+///鼠标状态报告,对应的HID是上边的报告
+#pragma pack(1)
+struct mouse_report_t
+{
+    BYTE    report_id;
+    BYTE    button; //0 no press, 1 left, 2 right ; 3 左右同时按下，触摸板一般不会有这种事
+    CHAR    dx;
+    CHAR    dy;
+    CHAR    v_wheel; // 垂直
+    CHAR    h_wheel; // 水平
+};
+#pragma pack()
+
+
+#pragma pack(1)
+struct mouse_report5
+{
+    BYTE    report_id;
+    BYTE    button; //0 no press, 1 left, 2 right ; 3 左右同时按下，触摸板一般不会有这种事
+    CHAR    dx;
+    CHAR    dy;
+    CHAR    v_wheel; // 垂直
+};
+#pragma pack()
+
+
+#pragma pack(push)
+#pragma pack(1)
+typedef struct _PTP_CONTACT {
+    UCHAR		Confidence : 1;
+    UCHAR		TipSwitch : 1;
+    UCHAR		ContactID : 3;
+    UCHAR		Padding : 3;
+    USHORT		X;
+    USHORT		Y;
+} PTP_CONTACT, * PPTP_CONTACT;
+#pragma pack(pop)
+
+typedef struct _PTP_REPORT {
+    UCHAR       ReportID;
+    PTP_CONTACT Contacts[5];
+    USHORT      ScanTime;
+    UCHAR       ContactCount;
+    UCHAR       IsButtonClicked;
+} PTP_REPORT, * PPTP_REPORT;
+
+typedef struct _PTP_DEVICE_FETURE_REPORT {
+    UCHAR ReportID;
+    UCHAR FeatureValue;
+} PTP_DEVICE_FETURE_REPORT, * PPTP_DEVICE_FETURE_REPORT;
+
+typedef struct _PTP_DEVICE_HQA_CERTIFICATION_REPORT {
+    UCHAR ReportID;
+    UCHAR CertificationBlob[256];
+} PTP_DEVICE_HQA_CERTIFICATION_REPORT, * PPTP_DEVICE_HQA_CERTIFICATION_REPORT;
+
+
+typedef struct _PTP_PARSER {
+
+    //保存追踪的手指数据
+    PTP_REPORT lastFinger;
+    PTP_REPORT currentFinger;
+
+    char nMouse_Pointer_CurrentIndex; //定义当前鼠标指针触摸点坐标的数据索引号，-1为未定义
+    char nMouse_LButton_CurrentIndex; //定义当前鼠标左键触摸点坐标的数据索引号，-1为未定义
+    char nMouse_RButton_CurrentIndex; //定义当前鼠标右键触摸点坐标的数据索引号，-1为未定义
+    char nMouse_MButton_CurrentIndex; //定义当前鼠标中键触摸点坐标的数据索引号，-1为未定义
+    char nMouse_Wheel_CurrentIndex; //定义当前鼠标滚轮辅助参考手指触摸点坐标的数据索引号，-1为未定义
+
+    char nMouse_Pointer_LastIndex; //定义上次鼠标指针触摸点坐标的数据索引号，-1为未定义
+    char nMouse_LButton_LastIndex; //定义上次鼠标左键触摸点坐标的数据索引号，-1为未定义
+    char nMouse_RButton_LastIndex; //定义上次鼠标右键触摸点坐标的数据索引号，-1为未定义
+    char nMouse_MButton_LastIndex; //定义上次鼠标中键触摸点坐标的数据索引号，-1为未定义
+    char nMouse_Wheel_LastIndex; //定义上次鼠标滚轮辅助参考手指触摸点坐标的数据索引号，-1为未定义
+
+    BOOLEAN bMouse_Wheel_Mode; //定义鼠标滚轮状态，0为滚轮未激活，1为滚轮激活
+    BOOLEAN bMouse_Wheel_Mode_JudgeEnable;//定义是否开启滚轮判别
+
+    BOOLEAN bPtpReportCollection;//手势集合标志
+    BOOLEAN bGestureCompleted;//手势操作结束标志
+
+    LARGE_INTEGER MousePointer_DefineTime;//鼠标指针定义时间，用于计算按键间隔时间来区分判定鼠标中间和滚轮操作
+
+    LARGE_INTEGER JitterFixStartTime; // 修正触摸点抖动修正时间计时器
+
+    float Scroll_TotalDistanceX; //定义鼠标累计滚动距离X
+    float Scroll_TotalDistanceY; //定义鼠标累计滚动距离Y
+
+    ULONG tick_Count;
+
+    LARGE_INTEGER current_Ticktime;//当前报告计时
+
+    //
+    ULONG physicalMax_X;
+    ULONG physicalMax_Y;
+    ULONG logicalMax_X;
+    ULONG logicalMax_Y;
+    CHAR unitExp;
+    UCHAR unit;
+
+    DOUBLE physical_Width_mm;
+    DOUBLE  physical_Height_mm;
+
+    //定义手指头尺寸大小
+    float thumb_Width;//手指头宽度
+    float thumb_Height;//手指头高度
+    float thumb_Scale;//手指头尺寸缩放比例
+    float FingerMinDistance;//定义有效的相邻手指最小距离
+    float FingerClosedThresholdDistance;//定义相邻手指合拢时的最小距离
+    float FingerMaxDistance;//定义有效的相邻手指最大距离
+    float TouchPad_DPMM_x;//定义触摸板分辨率
+    float TouchPad_DPMM_y;//定义触摸板分辨率
+    float PointerSensitivity_x;//定义指针灵敏度即指针点移动量缩放比例
+    float PointerSensitivity_y;//定义指针灵敏度即指针点移动量缩放比例
+
+
+} PTP_PARSER, * PPTP_PARSER;
+
+
+typedef struct _HIDDESC_SETTING {
+    UCHAR CONTACT_COUNT_MAXIMUM;
+    UCHAR PAD_TYPE;
+    UCHAR INPUT_MODE;
+    UCHAR FUNCTION_SWITCH;
+
+    UCHAR REPORTID_MULTITOUCH_COLLECTION;
+    UCHAR REPORTID_MOUSE_COLLECTION;
+
+    UCHAR REPORTID_DEVICE_CAPS;
+    UCHAR REPORTSIZE_DEVICE_CAPS;
+
+    UCHAR REPORTID_PTPHQA;
+    USHORT REPORTSIZE_PTPHQA;
+
+    UCHAR REPORTID_INPUT_MODE;
+    UCHAR REPORTSIZE_INPUT_MODE;
+
+    UCHAR REPORTID_FUNCTION_SWITCH;
+    UCHAR REPORTSIZE_FUNCTION_SWITCH;
+
+    UCHAR REPORTID_LATENCY;//延迟模式
+    UCHAR REPORTID_CONFIG_PTP_HAPTICS_ID;//触控反馈配置SimpleHapticsController
+
+    BOOLEAN bHybrid_ReportingMode;//混合报告模式状态,TRUE为Single finger hybrid reporting mode单指混合模式，FALSE为Parallel mode并行报告模式
+    UCHAR DeviceDescriptorFingerCount;
+
+}HIDDESC_SETTING, * PHIDDESC_SETTING;
+
+
 typedef
 struct _HID_MINI_DEV_EXTENSION
 {
@@ -48,7 +215,45 @@ struct _HID_MINI_DEV_EXTENSION
     //3 bytes align
     PDEVICE_OBJECT pFdo;
     IO_REMOVE_LOCK RemoveLock;
+
+    WDFDEVICE FxDevice;//
+
+    PUSB_DEVICE_DESCRIPTOR pUsbDeviceDescriptorGlobal;
+    PUSB_CONFIGURATION_DESCRIPTOR pConfigDescGlobal;
+    PHID_DESCRIPTOR pHidDescGlobal;
+
+    PUCHAR pReportDesciptorData;
+    USHORT ReportDescriptorLength;
+    PPTP_DEVICE_HQA_CERTIFICATION_REPORT pCertReport;
+    PWCHAR pUsbStrData;
+
+    // Windows PTP context
+    BOOLEAN  SetFeatureReady;
+    BOOLEAN  SetInputModeOK;
+    BOOLEAN  SetFunSwicthOK;
+    UCHAR   GetStringStep;
+
+    BOOLEAN PtpInputModeOn;
+    BOOLEAN bFoundRegCurrentUserSID;
+    BOOLEAN bSetAAPThresholdOK;
+
+    //MouseLikeTouchpad Paser context
+    PTP_PARSER  tp_settings;  //PTP_PARSER数据
+    HIDDESC_SETTING desc_settings;
+
+    ULONG MouseSensitivity_Index;
+    double MouseSensitivity_Value;
+
+    BOOLEAN bWheelDisabled;//当前滚轮功能开启关闭状态
+    BOOLEAN bSensitivityChanged;
+
+
+    BOOLEAN bMouseLikeTouchPad_Mode;//切换仿鼠标式触摸板与windows原版的PTP精确式触摸板操作方式
+
+    UNICODE_STRING strCurrentUserSID;//当前登录用户的SID
+
 } HID_MINI_DEV_EXTENSION, * PHID_MINI_DEV_EXTENSION;
+
 
 typedef
 struct _WRKITM_RESET_CONTEXT
@@ -725,241 +930,17 @@ CONST HID_DESCRIPTOR DefaultHidDescriptor = {
 };
 
 
-///鼠标状态报告,对应的HID是上边的报告
-#pragma pack(1)
-struct mouse_report_t
-{
-    BYTE    report_id;
-    BYTE    button; //0 no press, 1 left, 2 right ; 3 左右同时按下，触摸板一般不会有这种事
-    CHAR    dx;
-    CHAR    dy;
-    CHAR    v_wheel; // 垂直
-    CHAR    h_wheel; // 水平
-};
-#pragma pack()
-
-
-#pragma pack(1)
-struct mouse_report5
-{
-    BYTE    report_id;
-    BYTE    button; //0 no press, 1 left, 2 right ; 3 左右同时按下，触摸板一般不会有这种事
-    CHAR    dx;
-    CHAR    dy;
-    CHAR    v_wheel; // 垂直
-};
-#pragma pack()
-
-
-#pragma pack(push)
-#pragma pack(1)
-typedef struct _PTP_CONTACT {
-    UCHAR		Confidence : 1;
-    UCHAR		TipSwitch : 1;
-    UCHAR		ContactID : 3;
-    UCHAR		Padding : 3;
-    USHORT		X;
-    USHORT		Y;
-} PTP_CONTACT, * PPTP_CONTACT;
-#pragma pack(pop)
-
-typedef struct _PTP_REPORT {
-    UCHAR       ReportID;
-    PTP_CONTACT Contacts[5];
-    USHORT      ScanTime;
-    UCHAR       ContactCount;
-    UCHAR       IsButtonClicked;
-} PTP_REPORT, * PPTP_REPORT;
-
-typedef struct _PTP_DEVICE_FETURE_REPORT {
-    UCHAR ReportID;
-    UCHAR FeatureValue;
-} PTP_DEVICE_FETURE_REPORT, * PPTP_DEVICE_FETURE_REPORT;
-
-typedef struct _PTP_DEVICE_HQA_CERTIFICATION_REPORT {
-    UCHAR ReportID;
-    UCHAR CertificationBlob[256];
-} PTP_DEVICE_HQA_CERTIFICATION_REPORT, * PPTP_DEVICE_HQA_CERTIFICATION_REPORT;
-
-
-
-#define STABLE_INTERVAL_FingerSeparated_MSEC   20   // 手指分开按到触摸板的稳定时间间隔
-#define STABLE_INTERVAL_FingerClosed_MSEC      100   // 手指并拢按到触摸板的稳定时间间隔 
-
-#define MouseReport_INTERVAL_MSEC         8   // 鼠标报告间隔时间ms，以频率125hz为基准
-#define ButtonPointer_Interval_MSEC      150   // 鼠标左中右键与指针操作间隔时间ms，
-
-#define Jitter_Offset         10    // 修正触摸点轻微抖动的位移阈值
-
-#define SCROLL_OFFSET_THRESHOLD_X      100   // 滚动位移量X阈值 
-#define SCROLL_OFFSET_THRESHOLD_Y      100   // 滚动位移量Y阈值 
-
-
-#pragma pack(push)
-#pragma pack(1)
-typedef struct _HYBRID_REPORT {
-    UCHAR       ReportID;
-    UCHAR		Confidence : 1;
-    UCHAR		TipSwitch : 1;
-    UCHAR		Padding1 : 2;
-    UCHAR		ContactID : 4;
-    USHORT		X;
-    USHORT		Y;
-    USHORT      ScanTime;
-    UCHAR       ContactCount : 4;
-    UCHAR       Padding2 : 3;
-    UCHAR		IsButtonClicked : 1;
-    USHORT      C5_BLOB;
-
-} HYBRID_REPORT, * PHYBRID_REPORT;
-#pragma pack(pop)
-
-
-CHAR UnitExponent_Table[16] = { 0,1,2,3,4,5,6,7,-8,-7,-6,-5,-4,-3,-2,1 };
-
-double MouseSensitivityTable[3] = { 0.8,1.0,1.25 };
-
-typedef struct _PTP_PARSER {
-
-    //保存追踪的手指数据
-    PTP_REPORT lastFinger;
-    PTP_REPORT currentFinger;
-
-    char nMouse_Pointer_CurrentIndex; //定义当前鼠标指针触摸点坐标的数据索引号，-1为未定义
-    char nMouse_LButton_CurrentIndex; //定义当前鼠标左键触摸点坐标的数据索引号，-1为未定义
-    char nMouse_RButton_CurrentIndex; //定义当前鼠标右键触摸点坐标的数据索引号，-1为未定义
-    char nMouse_MButton_CurrentIndex; //定义当前鼠标中键触摸点坐标的数据索引号，-1为未定义
-    char nMouse_Wheel_CurrentIndex; //定义当前鼠标滚轮辅助参考手指触摸点坐标的数据索引号，-1为未定义
-
-    char nMouse_Pointer_LastIndex; //定义上次鼠标指针触摸点坐标的数据索引号，-1为未定义
-    char nMouse_LButton_LastIndex; //定义上次鼠标左键触摸点坐标的数据索引号，-1为未定义
-    char nMouse_RButton_LastIndex; //定义上次鼠标右键触摸点坐标的数据索引号，-1为未定义
-    char nMouse_MButton_LastIndex; //定义上次鼠标中键触摸点坐标的数据索引号，-1为未定义
-    char nMouse_Wheel_LastIndex; //定义上次鼠标滚轮辅助参考手指触摸点坐标的数据索引号，-1为未定义
-
-    BOOLEAN bMouse_Wheel_Mode; //定义鼠标滚轮状态，0为滚轮未激活，1为滚轮激活
-    BOOLEAN bMouse_Wheel_Mode_JudgeEnable;//定义是否开启滚轮判别
-
-    BOOLEAN bPtpReportCollection;//手势集合标志
-    BOOLEAN bGestureCompleted;//手势操作结束标志
-
-    LARGE_INTEGER MousePointer_DefineTime;//鼠标指针定义时间，用于计算按键间隔时间来区分判定鼠标中间和滚轮操作
-    float TouchPad_ReportInterval;//定义触摸板报告间隔时间
-
-    LARGE_INTEGER JitterFixStartTime; // 修正触摸点抖动修正时间计时器
-
-    float Scroll_TotalDistanceX; //定义鼠标累计滚动距离X
-    float Scroll_TotalDistanceY; //定义鼠标累计滚动距离Y
-
-    ULONG tick_Count;
-    LARGE_INTEGER last_Ticktime; //上次报告计时
-    LARGE_INTEGER current_Ticktime;//当前报告计时
-    LARGE_INTEGER ticktime_Interval;//报告间隔时间
-
-    //
-    ULONG physicalMax_X;
-    ULONG physicalMax_Y;
-    ULONG logicalMax_X;
-    ULONG logicalMax_Y;
-    CHAR unitExp;
-    UCHAR unit;
-
-    DOUBLE physical_Width_mm;
-    DOUBLE  physical_Height_mm;
-
-    //定义手指头尺寸大小
-    float thumb_Width;//手指头宽度
-    float thumb_Height;//手指头高度
-    float thumb_Scale;//手指头尺寸缩放比例
-    float FingerMinDistance;//定义有效的相邻手指最小距离
-    float FingerClosedThresholdDistance;//定义相邻手指合拢时的最小距离
-    float FingerMaxDistance;//定义有效的相邻手指最大距离
-    float TouchPad_DPMM_x;//定义触摸板分辨率
-    float TouchPad_DPMM_y;//定义触摸板分辨率
-    float PointerSensitivity_x;//定义指针灵敏度即指针点移动量缩放比例
-    float PointerSensitivity_y;//定义指针灵敏度即指针点移动量缩放比例
-
-    ULONG StartY_TOP; //起点误触横线Y值为距离触摸板顶部10mm处的Y坐标
-    ULONG StartX_LEFT; //起点误触竖线X值为距离触摸板中心线左右侧43.2mm处的X坐标
-    ULONG StartX_RIGHT; //起点误触竖线X值为距离触摸板中心线左右侧43.2mm处的X坐标
-    BOOLEAN bPhysicalButtonUp;//物理按键状态
-
-} PTP_PARSER, * PPTP_PARSER;
-
-
-PUSB_DEVICE_DESCRIPTOR pUsbDeviceDescriptorGlobal;
-PUSB_CONFIGURATION_DESCRIPTOR pConfigDescGlobal;
-PHID_DESCRIPTOR pHidDescGlobal;
-
-PUCHAR pReportDesciptorData;
-USHORT ReportDescriptorLength;
-PPTP_DEVICE_HQA_CERTIFICATION_REPORT pCertReport;
-PWCHAR pUsbStrData;
-
-// Windows PTP context
-PBYTE pReportDesciptorData;
-BOOLEAN  HidReportDescriptorSaved;
-
-UCHAR CONTACT_COUNT_MAXIMUM;
-UCHAR PAD_TYPE;
-UCHAR INPUT_MODE;
-UCHAR FUNCTION_SWITCH;
-
-UCHAR REPORTID_MULTITOUCH_COLLECTION;
-UCHAR REPORTID_MOUSE_COLLECTION;
-
-UCHAR REPORTID_DEVICE_CAPS;
-UCHAR REPORTSIZE_DEVICE_CAPS;
-
-UCHAR REPORTID_PTPHQA;
-USHORT REPORTSIZE_PTPHQA;
-
-UCHAR REPORTID_INPUT_MODE;
-UCHAR REPORTSIZE_INPUT_MODE;
-
-UCHAR REPORTID_FUNCTION_SWITCH;
-UCHAR REPORTSIZE_FUNCTION_SWITCH;
-
-UCHAR REPORTID_LATENCY;//延迟模式
-UCHAR REPORTID_CONFIG_PTP_HAPTICS_ID;//触控反馈配置SimpleHapticsController
-
-HYBRID_REPORT currentPartOfFrame;
-PTP_REPORT combinedPacket;
-BYTE contactCountIndex;//Single finger hybrid reporting mode单指混合模式下的帧内索引号兼计数器
-BOOLEAN CombinedPacketReady;
-
-BOOLEAN  SetFeatureReady;
-BOOLEAN  SetInputModeOK;
-BOOLEAN  SetFunSwicthOK;
-UCHAR   GetStringStep;
-
-BOOLEAN PtpInputModeOn;
-BOOLEAN bFoundRegCurrentUserSID;
-BOOLEAN bSetAAPThresholdOK;
-
-//MouseLikeTouchpad Paser context
-PTP_PARSER  tp_settings;  //PTP_PARSER数据
-
-UCHAR MouseSensitivity_Index;
-double MouseSensitivity_Value;
-
-BOOLEAN bWheelDisabled;//当前滚轮功能开启关闭状态
-BOOLEAN bWheelScrollMode;//定义鼠标滚轮实现方式，TRUE为模仿鼠标滚轮，FALSE为触摸板双指滑动手势
-
-BOOLEAN bHybrid_ReportingMode;//混合报告模式状态,TRUE为Single finger hybrid reporting mode单指混合模式，FALSE为Parallel mode并行报告模式
-UCHAR DeviceDescriptorFingerCount;
-
-BOOLEAN bMouseLikeTouchPad_Mode;//切换仿鼠标式触摸板与windows原版的PTP精确式触摸板操作方式
-
-UNICODE_STRING strCurrentUserSID;//当前登录用户的SID
 
 
 NTSTATUS
-AnalyzeHidReportDescriptor(
-    //PFILTER_EXTENSION pDevContext
-);
+AnalyzeHidReportDescriptor(PHID_MINI_DEV_EXTENSION pDevContext);
 
+void SetNextSensitivity(PHID_MINI_DEV_EXTENSION pDevContext);
+NTSTATUS SetRegisterMouseSensitivity(PHID_MINI_DEV_EXTENSION pDevContext, ULONG ms_idx);
+NTSTATUS GetRegisterMouseSensitivity(PHID_MINI_DEV_EXTENSION pDevContext, ULONG* ms_idx);
 
+VOID MouseLikeTouchPad_parse_init(PHID_MINI_DEV_EXTENSION pDevContext);
+VOID MouseLikeTouchPad_parse(PHID_MINI_DEV_EXTENSION pDevContext, PBYTE pReportBuffer, PULONG pReportLength);
 
 VOID RegDebug(WCHAR* strValueName, PVOID dataValue, ULONG datasizeValue);//RegDebug(L"Run debug here",pBuffer,pBufferSize);//RegDebug(L"Run debug here",NULL,0x12345678);
 

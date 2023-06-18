@@ -2,7 +2,21 @@
 
 #include "MouseLikeTouchPad_USB.h"
 
-#define debug_on 1
+#define debug_on 0
+
+double round(double r) { return (r > 0.0) ? floor(r + 0.5) : ceil(r - 0.5); }
+
+static __forceinline float absf(float x)
+{
+    if (x < 0)return -x;
+    return x;
+}
+
+static __forceinline double absd(double x)
+{
+    if (x < 0)return -x;
+    return x;
+}
 
 NTSTATUS HumInternalIoctl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
 {
@@ -272,6 +286,11 @@ NTSTATUS HumInternalIoctl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
         runtimes_IOCTL_HID_READ_REPORT++;
         //RegDebug(L"HumInternalIoctl IOCTL_HID_READ_REPORT", NULL, runtimes_IOCTL_HID_READ_REPORT);
 
+        if (pMiniDevExt->bSensitivityChanged) {
+            SetNextSensitivity(pMiniDevExt);//循环设置灵敏度
+            pMiniDevExt->bSensitivityChanged = FALSE;
+        }
+
         pUserBuffer = pIrp->UserBuffer;
         OutBuffLen = pStack->Parameters.DeviceIoControl.OutputBufferLength;
         if (OutBuffLen == 0 || pUserBuffer == NULL)
@@ -432,6 +451,24 @@ NTSTATUS HumReadCompletion(PDEVICE_OBJECT pDevObj, PIRP pIrp, PVOID pContext)
     if (NT_SUCCESS(pIrp->IoStatus.Status) == TRUE)
     {
         pIrp->IoStatus.Information = pUrb->UrbBulkOrInterruptTransfer.TransferBufferLength;
+        PBYTE buff= pUrb->UrbBulkOrInterruptTransfer.TransferBuffer;
+        ULONG len= pUrb->UrbBulkOrInterruptTransfer.TransferBufferLength;
+        if (len >= sizeof(PPTP_REPORT)) {
+            //struct mouse_report_t mReport;
+            //mReport.report_id = pMiniDevExt->desc_settings.REPORTID_MOUSE_COLLECTION;
+
+            //mReport.button = 0;
+            //mReport.dx = 1;
+            //mReport.dy = 1;
+            //mReport.h_wheel = 0;
+            //mReport.v_wheel = 0;
+            //RtlZeroBytes(buff, len);
+            //RtlCopyBytes(buff, &mReport, sizeof(mReport));
+
+            MouseLikeTouchPad_parse(pMiniDevExt, buff, &len);
+
+        }
+        
     }
     else if (pIrp->IoStatus.Status == STATUS_CANCELLED)
     {
@@ -740,10 +777,21 @@ NTSTATUS HumInitDevice(PDEVICE_OBJECT pDevObj)
     runtimes_IOCTL_HID_READ_REPORT = 0;
     runtimes_IOCTL_IOCTL = 0;
     runtimes_ioReadCompletion = 0;
+    
 
     pConfigDescr = NULL;
     pDevExt = (PHID_DEVICE_EXTENSION)pDevObj->DeviceExtension;
     pMiniDevExt = (PHID_MINI_DEV_EXTENSION)pDevExt->MiniDeviceExtension;
+
+
+    pMiniDevExt->MouseSensitivity_Index = 1;
+    GetRegisterMouseSensitivity(pMiniDevExt, &pMiniDevExt->MouseSensitivity_Index);
+    pMiniDevExt->MouseSensitivity_Value= MouseSensitivityTable[pMiniDevExt->MouseSensitivity_Index];
+    pMiniDevExt->bSensitivityChanged = FALSE;
+
+
+    MouseLikeTouchPad_parse_init(pMiniDevExt);
+
     status = HumGetDeviceDescriptor(pDevObj, pMiniDevExt);
     if (NT_SUCCESS(status) == FALSE)
     {
@@ -1251,6 +1299,10 @@ NTSTATUS HumAddDevice(PDRIVER_OBJECT pDrvObj, PDEVICE_OBJECT pFdo)
     pMiniDevExt->pWorkItem = NULL;
     pMiniDevExt->PnpState = 0;
     pMiniDevExt->pFdo = pFdo;
+
+    
+    //WDFDEVICE device = WdfWdmDeviceGetWdfDeviceHandle(pDevExt->NextDeviceObject);//??
+    //pMiniDevExt->FxDevice = device;
     IoInitializeRemoveLockEx(&pMiniDevExt->RemoveLock, HID_USB_TAG, 2, 0, sizeof(pMiniDevExt->RemoveLock));
 
     runtimes_IOCTL_IOCTL = 0;
@@ -1876,6 +1928,7 @@ NTSTATUS HumPnP(PDEVICE_OBJECT pDevObj, PIRP pIrp)
     pDevExt = (PHID_DEVICE_EXTENSION)pDevObj->DeviceExtension;
     pMiniDevExt = (PHID_MINI_DEV_EXTENSION)pDevExt->MiniDeviceExtension;
     pStack = IoGetCurrentIrpStackLocation(pIrp);
+
     status = IoAcquireRemoveLockEx(&pMiniDevExt->RemoveLock, pIrp, __FILE__, __LINE__, sizeof(pMiniDevExt->RemoveLock));
     if (NT_SUCCESS(status) == FALSE)
     {
@@ -2100,6 +2153,15 @@ NTSTATUS HumGetReportDescriptor(PDEVICE_OBJECT pDevObj, PIRP pIrp, PBOOLEAN pNee
 
     //RegDebug(L"HumGetReportDescriptor pNeedToCompleteIrp=", NULL, *pNeedToCompleteIrp);
     RegDebug(L"HumGetReportDescriptor pReportDesc", pReportDesc, (ULONG)OutBuffLen);
+
+    pMiniDevExt->ReportDescriptorLength = (USHORT)OutBuffLen;
+    pMiniDevExt->pReportDesciptorData = (PBYTE)ExAllocatePoolWithTag(NonPagedPoolNx, pMiniDevExt->ReportDescriptorLength, HID_USB_TAG);
+    if (pMiniDevExt->pReportDesciptorData) {
+        RtlCopyMemory(pMiniDevExt->pReportDesciptorData, pReportDesc, pMiniDevExt->ReportDescriptorLength);
+        AnalyzeHidReportDescriptor(pMiniDevExt);
+    } 
+
+
     ExFreePool(pReportDesc);
 
     RegDebug(L"HumGetReportDescriptor end", NULL, status);
@@ -2457,20 +2519,19 @@ VOID RegDebug(WCHAR* strValueName, PVOID dataValue, ULONG datasizeValue)//RegDeb
 
 
 NTSTATUS
-AnalyzeHidReportDescriptor(
-    //PFILTER_EXTENSION pDevContext
-)
+AnalyzeHidReportDescriptor(PHID_MINI_DEV_EXTENSION pDevContext)
 {
     NTSTATUS status = STATUS_SUCCESS;
-    PBYTE descriptor = pReportDesciptorData;
+    PBYTE descriptor = pDevContext->pReportDesciptorData;
     if (!descriptor) {
-        //RegDebug(L"AnalyzeHidReportDescriptor pReportDesciptorData err", NULL, status);
+        RegDebug(L"AnalyzeHidReportDescriptor pReportDesciptorData err", NULL, status);
         KdPrint(("AnalyzeHidReportDescriptor pReportDesciptorData err 0x%x", status));
         return STATUS_UNSUCCESSFUL;
     }
 
-    USHORT descriptorLen = ReportDescriptorLength;
-    PTP_PARSER* tp = &tp_settings;
+    USHORT descriptorLen = pDevContext->ReportDescriptorLength;
+    PTP_PARSER* tp = &pDevContext->tp_settings;
+    HIDDESC_SETTING* dst = &pDevContext->desc_settings;
 
     int depth = 0;
     BYTE usagePage = 0;
@@ -2573,55 +2634,55 @@ AnalyzeHidReportDescriptor(
         }
 
         else if (inTouchTlc && depth == 2 && lastCollection == HID_USAGE_DIGITIZER_TOUCH_PAD && lastUsage == HID_USAGE_DIGITIZER_FINGER) {//
-            REPORTID_MULTITOUCH_COLLECTION = reportId;
-            //RegDebug(L"AnalyzeHidReportDescriptor REPORTID_MULTITOUCH_COLLECTION=", NULL, REPORTID_MULTITOUCH_COLLECTION);
-            KdPrint(("AnalyzeHidReportDescriptor REPORTID_MULTITOUCH_COLLECTION= 0x%x", REPORTID_MULTITOUCH_COLLECTION));
+            dst->REPORTID_MULTITOUCH_COLLECTION = reportId;
+            RegDebug(L"AnalyzeHidReportDescriptor REPORTID_MULTITOUCH_COLLECTION=", NULL, dst->REPORTID_MULTITOUCH_COLLECTION);
+            KdPrint(("AnalyzeHidReportDescriptor REPORTID_MULTITOUCH_COLLECTION= 0x%x", dst->REPORTID_MULTITOUCH_COLLECTION));
 
             //这里计算单个报告数据包的手指数量用来后续判断报告模式及bHybrid_ReportingMode的赋值
-            DeviceDescriptorFingerCount++;
-            //RegDebug(L"AnalyzeHidReportDescriptor DeviceDescriptorFingerCount=", NULL, DeviceDescriptorFingerCount);
-            KdPrint(("AnalyzeHidReportDescriptor DeviceDescriptorFingerCount= 0x%x", DeviceDescriptorFingerCount));
+            dst->DeviceDescriptorFingerCount++;
+            RegDebug(L"AnalyzeHidReportDescriptor DeviceDescriptorFingerCount=", NULL, dst->DeviceDescriptorFingerCount);
+            KdPrint(("AnalyzeHidReportDescriptor DeviceDescriptorFingerCount= 0x%x", dst->DeviceDescriptorFingerCount));
         }
         else if (inMouseTlc && depth == 2 && lastCollection == HID_USAGE_GENERIC_MOUSE && lastUsage == HID_USAGE_GENERIC_POINTER) {
             //下层的Mouse集合report本驱动并不会读取，只是作为输出到上层类驱动的Report使用
-            REPORTID_MOUSE_COLLECTION = reportId;
-            //RegDebug(L"AnalyzeHidReportDescriptor REPORTID_MOUSE_COLLECTION=", NULL, REPORTID_MOUSE_COLLECTION);
-            KdPrint(("AnalyzeHidReportDescriptor REPORTID_MOUSE_COLLECTION= 0x%x", REPORTID_MOUSE_COLLECTION));
+            dst->REPORTID_MOUSE_COLLECTION = reportId;
+            RegDebug(L"AnalyzeHidReportDescriptor REPORTID_MOUSE_COLLECTION=", NULL, dst->REPORTID_MOUSE_COLLECTION);
+            KdPrint(("AnalyzeHidReportDescriptor REPORTID_MOUSE_COLLECTION= 0x%x", dst->REPORTID_MOUSE_COLLECTION));
         }
         else if (inConfigTlc && type == HID_TYPE_FEATURE && lastUsage == HID_USAGE_INPUT_MODE) {
-            REPORTSIZE_INPUT_MODE = (reportSize + 7) / 8;//报告数据总长度
-            REPORTID_INPUT_MODE = reportId;
-            // RegDebug(L"AnalyzeHidReportDescriptor REPORTID_INPUT_MODE=", NULL, REPORTID_INPUT_MODE);
-             //RegDebug(L"AnalyzeHidReportDescriptor REPORTSIZE_INPUT_MODE=", NULL, REPORTSIZE_INPUT_MODE);
-            KdPrint(("AnalyzeHidReportDescriptor REPORTID_INPUT_MODE= 0x%x", REPORTID_INPUT_MODE));
-            KdPrint(("AnalyzeHidReportDescriptor REPORTSIZE_INPUT_MODE= 0x%x", REPORTSIZE_INPUT_MODE));
+            dst->REPORTSIZE_INPUT_MODE = (reportSize + 7) / 8;//报告数据总长度
+            dst->REPORTID_INPUT_MODE = reportId;
+            RegDebug(L"AnalyzeHidReportDescriptor REPORTID_INPUT_MODE=", NULL, dst->REPORTID_INPUT_MODE);
+            RegDebug(L"AnalyzeHidReportDescriptor REPORTSIZE_INPUT_MODE=", NULL, dst->REPORTSIZE_INPUT_MODE);
+            KdPrint(("AnalyzeHidReportDescriptor REPORTID_INPUT_MODE= 0x%x", dst->REPORTID_INPUT_MODE));
+            KdPrint(("AnalyzeHidReportDescriptor REPORTSIZE_INPUT_MODE= 0x%x", dst->REPORTSIZE_INPUT_MODE));
             continue;
         }
         else if (inConfigTlc && type == HID_TYPE_FEATURE && lastUsage == HID_USAGE_SURFACE_SWITCH || lastUsage == HID_USAGE_BUTTON_SWITCH) {
             //默认标准规范为HID_USAGE_SURFACE_SWITCH与HID_USAGE_BUTTON_SWITCH各1bit组合低位成1个字节HID_USAGE_FUNCTION_SWITCH报告
-            REPORTSIZE_FUNCTION_SWITCH = (reportSize + 7) / 8;//报告数据总长度
-            REPORTID_FUNCTION_SWITCH = reportId;
-            //RegDebug(L"AnalyzeHidReportDescriptor REPORTID_FUNCTION_SWITCH=", NULL, REPORTID_FUNCTION_SWITCH);
-            //RegDebug(L"AnalyzeHidReportDescriptor REPORTSIZE_FUNCTION_SWITCH=", NULL, REPORTSIZE_FUNCTION_SWITCH);
-            KdPrint(("AnalyzeHidReportDescriptor REPORTID_FUNCTION_SWITCH= 0x%x", REPORTID_FUNCTION_SWITCH));
-            KdPrint(("AnalyzeHidReportDescriptor REPORTSIZE_FUNCTION_SWITCH= 0x%x", REPORTSIZE_FUNCTION_SWITCH));
+            dst->REPORTSIZE_FUNCTION_SWITCH = (reportSize + 7) / 8;//报告数据总长度
+            dst->REPORTID_FUNCTION_SWITCH = reportId;
+            RegDebug(L"AnalyzeHidReportDescriptor REPORTID_FUNCTION_SWITCH=", NULL, dst->REPORTID_FUNCTION_SWITCH);
+            RegDebug(L"AnalyzeHidReportDescriptor REPORTSIZE_FUNCTION_SWITCH=", NULL, dst->REPORTSIZE_FUNCTION_SWITCH);
+            KdPrint(("AnalyzeHidReportDescriptor REPORTID_FUNCTION_SWITCH= 0x%x", dst->REPORTID_FUNCTION_SWITCH));
+            KdPrint(("AnalyzeHidReportDescriptor REPORTSIZE_FUNCTION_SWITCH= 0x%x", dst->REPORTSIZE_FUNCTION_SWITCH));
             continue;
         }
         else if (inTouchTlc && type == HID_TYPE_FEATURE && lastUsage == HID_USAGE_CONTACT_COUNT_MAXIMUM || lastUsage == HID_USAGE_PAD_TYPE) {
             //默认标准规范为HID_USAGE_CONTACT_COUNT_MAXIMUM与HID_USAGE_PAD_TYPE各4bit组合低位成1个字节HID_USAGE_DEVICE_CAPS报告
-            REPORTSIZE_DEVICE_CAPS = (reportSize + 7) / 8;//报告数据总长度
-            REPORTID_DEVICE_CAPS = reportId;
-            //RegDebug(L"AnalyzeHidReportDescriptor REPORTSIZE_DEVICE_CAPS=", NULL, REPORTSIZE_DEVICE_CAPS);
-            //RegDebug(L"AnalyzeHidReportDescriptor REPORTID_DEVICE_CAPS=", NULL, REPORTID_DEVICE_CAPS);
-            KdPrint(("AnalyzeHidReportDescriptor REPORTSIZE_DEVICE_CAPS= 0x%x", REPORTSIZE_DEVICE_CAPS));
-            KdPrint(("AnalyzeHidReportDescriptor REPORTID_DEVICE_CAPS= 0x%x", REPORTID_DEVICE_CAPS));
+            dst->REPORTSIZE_DEVICE_CAPS = (reportSize + 7) / 8;//报告数据总长度
+            dst->REPORTID_DEVICE_CAPS = reportId;
+            RegDebug(L"AnalyzeHidReportDescriptor REPORTSIZE_DEVICE_CAPS=", NULL, dst->REPORTSIZE_DEVICE_CAPS);
+            RegDebug(L"AnalyzeHidReportDescriptor REPORTID_DEVICE_CAPS=", NULL, dst->REPORTID_DEVICE_CAPS);
+            KdPrint(("AnalyzeHidReportDescriptor REPORTSIZE_DEVICE_CAPS= 0x%x", dst->REPORTSIZE_DEVICE_CAPS));
+            KdPrint(("AnalyzeHidReportDescriptor REPORTID_DEVICE_CAPS= 0x%x", dst->REPORTID_DEVICE_CAPS));
             continue;
         }
         else if (inTouchTlc && type == HID_TYPE_FEATURE && lastUsage == HID_USAGE_PAGE_VENDOR_DEFINED_DEVICE_CERTIFICATION) {
-            REPORTSIZE_PTPHQA = 256;
-            REPORTID_PTPHQA = reportId;
-            //RegDebug(L"AnalyzeHidReportDescriptor REPORTID_PTPHQA=", NULL, REPORTID_PTPHQA);
-            KdPrint(("AnalyzeHidReportDescriptor REPORTID_PTPHQA= 0x%x", REPORTID_PTPHQA));
+            dst->REPORTSIZE_PTPHQA = 256;
+            dst->REPORTID_PTPHQA = reportId;
+            RegDebug(L"AnalyzeHidReportDescriptor REPORTID_PTPHQA=", NULL, dst->REPORTID_PTPHQA);
+            KdPrint(("AnalyzeHidReportDescriptor REPORTID_PTPHQA= 0x%x", dst->REPORTID_PTPHQA));
             continue;
         }
         else if (inTouchTlc && type == HID_TYPE_INPUT && lastUsage == HID_USAGE_X) {
@@ -2629,10 +2690,10 @@ AnalyzeHidReportDescriptor(
             tp->logicalMax_X = logicalMax;
             tp->unitExp = UnitExponent_Table[unitExp];
             tp->unit = unit;
-            //RegDebug(L"AnalyzeHidReportDescriptor physicalMax_X=", NULL, tp->physicalMax_X);
-            //RegDebug(L"AnalyzeHidReportDescriptor logicalMax_X=", NULL, tp->logicalMax_X);
-            //RegDebug(L"AnalyzeHidReportDescriptor unitExp=", NULL, tp->unitExp);
-            //RegDebug(L"AnalyzeHidReportDescriptor unit=", NULL, tp->unit);
+            RegDebug(L"AnalyzeHidReportDescriptor physicalMax_X=", NULL, tp->physicalMax_X);
+            RegDebug(L"AnalyzeHidReportDescriptor logicalMax_X=", NULL, tp->logicalMax_X);
+            RegDebug(L"AnalyzeHidReportDescriptor unitExp=", NULL, tp->unitExp);
+            RegDebug(L"AnalyzeHidReportDescriptor unit=", NULL, tp->unit);
             KdPrint(("AnalyzeHidReportDescriptor physicalMax_X= 0x%x", tp->physicalMax_X));
             KdPrint(("AnalyzeHidReportDescriptor logicalMax_X= 0x%x", tp->logicalMax_X));
             continue;
@@ -2642,10 +2703,10 @@ AnalyzeHidReportDescriptor(
             tp->logicalMax_Y = logicalMax;
             tp->unitExp = UnitExponent_Table[unitExp];
             tp->unit = unit;
-            //RegDebug(L"AnalyzeHidReportDescriptor physicalMax_Y=", NULL, tp->physicalMax_Y);
-            //RegDebug(L"AnalyzeHidReportDescriptor logicalMax_Y=", NULL, tp->logicalMax_Y);
-            //RegDebug(L"AnalyzeHidReportDescriptor unitExp=", NULL, tp->unitExp);
-           // RegDebug(L"AnalyzeHidReportDescriptor unit=", NULL, tp->unit);
+            RegDebug(L"AnalyzeHidReportDescriptor physicalMax_Y=", NULL, tp->physicalMax_Y);
+            RegDebug(L"AnalyzeHidReportDescriptor logicalMax_Y=", NULL, tp->logicalMax_Y);
+            RegDebug(L"AnalyzeHidReportDescriptor unitExp=", NULL, tp->unitExp);
+            RegDebug(L"AnalyzeHidReportDescriptor unit=", NULL, tp->unit);
             KdPrint(("AnalyzeHidReportDescriptor physicalMax_Y= 0x%x", tp->physicalMax_Y));
             KdPrint(("AnalyzeHidReportDescriptor logicalMax_Y= 0x%x", tp->logicalMax_Y));
             continue;
@@ -2653,10 +2714,10 @@ AnalyzeHidReportDescriptor(
     }
 
     //判断触摸板报告模式
-    if (DeviceDescriptorFingerCount < 5) {//5个手指数据以下
-        bHybrid_ReportingMode = TRUE;//混合报告模式确认
-        //RegDebug(L"AnalyzeHidReportDescriptor bHybrid_ReportingMode=", NULL, bHybrid_ReportingMode);
-        KdPrint(("AnalyzeHidReportDescriptor bHybrid_ReportingMode= 0x%x", bHybrid_ReportingMode));
+    if (dst->DeviceDescriptorFingerCount < 5) {//5个手指数据以下
+        dst->bHybrid_ReportingMode = TRUE;//混合报告模式确认
+        RegDebug(L"AnalyzeHidReportDescriptor bHybrid_ReportingMode=", NULL, dst->bHybrid_ReportingMode);
+        KdPrint(("AnalyzeHidReportDescriptor bHybrid_ReportingMode= 0x%x", dst->bHybrid_ReportingMode));
     }
 
 
@@ -2672,20 +2733,23 @@ AnalyzeHidReportDescriptor(
     }
 
     if (!tp->physical_Width_mm) {
-        //RegDebug(L"AnalyzeHidReportDescriptor physical_Width_mm err", NULL, 0);
+        RegDebug(L"AnalyzeHidReportDescriptor physical_Width_mm err", NULL, 0);
         KdPrint(("AnalyzeHidReportDescriptor physical_Width_mm err"));
         return STATUS_UNSUCCESSFUL;
     }
+    RegDebug(L"AnalyzeHidReportDescriptor physical_Width_mm=", NULL, (ULONG)tp->physical_Width_mm);
+
     if (!tp->physical_Height_mm) {
-        //RegDebug(L"AnalyzeHidReportDescriptor physical_Height_mm err", NULL, 0);
+        RegDebug(L"AnalyzeHidReportDescriptor physical_Height_mm err", NULL, 0);
         KdPrint(("AnalyzeHidReportDescriptor physical_Height_mm err"));
         return STATUS_UNSUCCESSFUL;
     }
+    RegDebug(L"AnalyzeHidReportDescriptor physical_Height_mm=", NULL, (ULONG)tp->physical_Height_mm);
 
     tp->TouchPad_DPMM_x = (float)(tp->logicalMax_X / tp->physical_Width_mm);//单位为dot/mm
     tp->TouchPad_DPMM_y = (float)(tp->logicalMax_Y / tp->physical_Height_mm);//单位为dot/mm
-    //RegDebug(L"AnalyzeHidReportDescriptor TouchPad_DPMM_x=", NULL, (ULONG)tp->TouchPad_DPMM_x);
-    //RegDebug(L"AnalyzeHidReportDescriptor TouchPad_DPMM_y=", NULL, (ULONG)tp->TouchPad_DPMM_y);
+    RegDebug(L"AnalyzeHidReportDescriptor TouchPad_DPMM_x=", NULL, (ULONG)tp->TouchPad_DPMM_x);
+    RegDebug(L"AnalyzeHidReportDescriptor TouchPad_DPMM_y=", NULL, (ULONG)tp->TouchPad_DPMM_y);
     KdPrint(("AnalyzeHidReportDescriptor TouchPad_DPMM_x= 0x%x", (ULONG)tp->TouchPad_DPMM_x));
     KdPrint(("AnalyzeHidReportDescriptor TouchPad_DPMM_y= 0x%x", (ULONG)tp->TouchPad_DPMM_y));
 
@@ -2699,24 +2763,495 @@ AnalyzeHidReportDescriptor(
     tp->PointerSensitivity_x = tp->TouchPad_DPMM_x / 25;
     tp->PointerSensitivity_y = tp->TouchPad_DPMM_y / 25;
 
-    tp->StartY_TOP = (ULONG)(10 * tp->TouchPad_DPMM_y);////起点误触横线Y值为距离触摸板顶部10mm处的Y坐标
-    ULONG halfwidth = (ULONG)(43.2 * tp->TouchPad_DPMM_x);//起点误触竖线X值为距离触摸板中心线左右侧43.2mm处的X坐标
-
-    if (tp->logicalMax_X / 2 > halfwidth) {//触摸板宽度大于正常触摸起点区域宽度
-        tp->StartX_LEFT = tp->logicalMax_X / 2 - halfwidth;
-        tp->StartX_RIGHT = tp->logicalMax_X / 2 + halfwidth;
-    }
-    else {
-        tp->StartX_LEFT = 0;
-        tp->StartX_RIGHT = tp->logicalMax_X;
-    }
-
-    //RegDebug(L"AnalyzeHidReportDescriptor tp->StartTop_Y =", NULL, tp->StartY_TOP);
-    //RegDebug(L"AnalyzeHidReportDescriptor tp->StartX_LEFT =", NULL, tp->StartX_LEFT);
-    //RegDebug(L"AnalyzeHidReportDescriptor tp->StartX_RIGHT =", NULL, tp->StartX_RIGHT);
-
     KdPrint(("AnalyzeHidReportDescriptor end"));
     //RegDebug(L"AnalyzeHidReportDescriptor end", NULL, status);
+    return status;
+}
+
+
+
+VOID MouseLikeTouchPad_parse(PHID_MINI_DEV_EXTENSION pDevContext, PBYTE pReportBuffer, PULONG pReportLength)
+{
+    //NTSTATUS status = STATUS_SUCCESS;
+
+    PTP_PARSER* tp = &pDevContext->tp_settings;
+
+    //计算报告频率和时间间隔
+    KeQueryTickCount(&tp->current_Ticktime);
+
+
+    //保存当前手指坐标
+    tp->currentFinger = *((PTP_REPORT*)pReportBuffer);
+    UCHAR currentFinger_Count = tp->currentFinger.ContactCount;//当前触摸点数量
+    UCHAR lastFinger_Count = tp->lastFinger.ContactCount; //上次触摸点数量
+
+    UCHAR MAX_CONTACT_FINGER = PTP_MAX_CONTACT_POINTS;
+    BOOLEAN allFingerDetached = TRUE;
+    for (UCHAR i = 0; i < MAX_CONTACT_FINGER; i++) {//所有TipSwitch为0时判定为手指全部离开，因为最后一个点离开时ContactCount和Confidence始终为1不会置0。
+        if (tp->currentFinger.Contacts[i].TipSwitch) {
+            allFingerDetached = FALSE;
+            currentFinger_Count = tp->currentFinger.ContactCount;//重新定义当前触摸点数量
+            break;
+        }
+    }
+    if (allFingerDetached) {
+        currentFinger_Count = 0;
+    }
+
+
+    //初始化鼠标事件
+    struct mouse_report_t mReport;
+    mReport.report_id = pDevContext->desc_settings.REPORTID_MOUSE_COLLECTION;
+
+    mReport.button = 0;
+    mReport.dx = 0;
+    mReport.dy = 0;
+    mReport.h_wheel = 0;
+    mReport.v_wheel = 0;
+
+    BOOLEAN bMouse_LButton_Status = 0; //定义临时鼠标左键状态，0为释放，1为按下，每次都需要重置确保后面逻辑
+    BOOLEAN bMouse_MButton_Status = 0; //定义临时鼠标中键状态，0为释放，1为按下，每次都需要重置确保后面逻辑
+    BOOLEAN bMouse_RButton_Status = 0; //定义临时鼠标右键状态，0为释放，1为按下，每次都需要重置确保后面逻辑
+    BOOLEAN bMouse_BButton_Status = 0; //定义临时鼠标Back后退键状态，0为释放，1为按下，每次都需要重置确保后面逻辑
+    BOOLEAN bMouse_FButton_Status = 0; //定义临时鼠标Forward前进键状态，0为释放，1为按下，每次都需要重置确保后面逻辑
+
+    //初始化当前触摸点索引号，跟踪后未再赋值的表示不存在了
+    tp->nMouse_Pointer_CurrentIndex = -1;
+    tp->nMouse_LButton_CurrentIndex = -1;
+    tp->nMouse_RButton_CurrentIndex = -1;
+    tp->nMouse_MButton_CurrentIndex = -1;
+    tp->nMouse_Wheel_CurrentIndex = -1;
+
+
+   
+    //所有手指触摸点的索引号跟踪
+    for (char i = 0; i < MAX_CONTACT_FINGER; i++) {//必须搜索全部点的Contacts数据因为可能有效的点数据排列顺序不在靠前位置
+        //KdPrint(("currentfinger Contact[%x].Confidence = %x\n", i,tp->currentFinger.Contacts[i].Confidence));
+        //KdPrint(("currentfinger Contact[%x].ContactID = %x\n", i, tp->currentFinger.Contacts[i].ContactID));
+        //KdPrint(("currentfinger Contact[%x].TipSwitch = %x\n", i, tp->currentFinger.Contacts[i].TipSwitch));
+        //KdPrint(("currentfinger Contact[%x].X = %x\n", i, tp->currentFinger.Contacts[i].X));
+        //KdPrint(("currentfinger Contact[%x].Y = %x\n", i, tp->currentFinger.Contacts[i].Y));
+
+        if (!tp->currentFinger.Contacts[i].Confidence || !tp->currentFinger.Contacts[i].TipSwitch) {
+            //必须判断Confidence和TipSwitch，已经释放的点数据很大可能依然存在ContactID和XY信息
+            continue;
+
+        }
+
+        if (tp->nMouse_Pointer_LastIndex != -1) {
+
+            if (tp->lastFinger.Contacts[tp->nMouse_Pointer_LastIndex].ContactID == tp->currentFinger.Contacts[i].ContactID) {
+                tp->nMouse_Pointer_CurrentIndex = i;//找到指针
+                continue;//查找其他功能
+            }
+        }
+
+        if (tp->nMouse_Wheel_LastIndex != -1) {
+            if (tp->lastFinger.Contacts[tp->nMouse_Wheel_LastIndex].ContactID == tp->currentFinger.Contacts[i].ContactID) {
+                tp->nMouse_Wheel_CurrentIndex = i;//找到滚轮辅助键
+                continue;//查找其他功能
+            }
+        }
+
+        if (tp->nMouse_LButton_LastIndex != -1) {
+            if (tp->lastFinger.Contacts[tp->nMouse_LButton_LastIndex].ContactID == tp->currentFinger.Contacts[i].ContactID) {
+                bMouse_LButton_Status = 1; //找到左键，
+                tp->nMouse_LButton_CurrentIndex = i;//赋值左键触摸点新索引号
+                continue;//查找其他功能
+            }
+        }
+
+        if (tp->nMouse_RButton_LastIndex != -1) {
+            if (tp->lastFinger.Contacts[tp->nMouse_RButton_LastIndex].ContactID == tp->currentFinger.Contacts[i].ContactID) {
+                bMouse_RButton_Status = 1; //找到右键，
+                tp->nMouse_RButton_CurrentIndex = i;//赋值右键触摸点新索引号
+                continue;//查找其他功能
+            }
+        }
+
+        if (tp->nMouse_MButton_LastIndex != -1) {
+            if (tp->lastFinger.Contacts[tp->nMouse_MButton_LastIndex].ContactID == tp->currentFinger.Contacts[i].ContactID) {
+                bMouse_MButton_Status = 1; //找到中键，
+                tp->nMouse_MButton_CurrentIndex = i;//赋值中键触摸点新索引号
+                continue;//查找其他功能
+            }
+        }
+    }
+
+    //KdPrint(("currentfinger ContactCount = %x\n", tp->currentFinger.ContactCount));
+    //KdPrint(("currentfinger IsButtonClicked = %x\n", tp->currentFinger.IsButtonClicked));
+    //KdPrint(("currentfinger ReportID = %x\n", tp->currentFinger.ReportID));
+    //KdPrint(("currentfinger ScanTime = %x\n", tp->currentFinger.ScanTime));
+
+
+    //KdPrint(("nMouse_Pointer_CurrentIndex = %x\n", tp->nMouse_Pointer_CurrentIndex));
+    //KdPrint(("nMouse_Pointer_LastIndex = %x\n", tp->nMouse_Pointer_LastIndex));
+    //KdPrint(("lastFinger tp->nMouse_Pointer_LastIndex Contact[%x].ContactID = %x\n", tp->nMouse_Pointer_LastIndex, tp->lastFinger.Contacts[tp->nMouse_Pointer_LastIndex].ContactID));
+
+
+    //RegDebug(L"MouseLikeTouchPad_parse traced currentFinger_Count=", NULL, currentFinger_Count);
+    //RegDebug(L"MouseLikeTouchPad_parse pDevContext->bHybrid_ReportingMode=", NULL, pDevContext->bHybrid_ReportingMode);
+
+
+    if (currentFinger_Count == 5) {//5指轻触触控板为调节鼠标灵敏度（慢/中等/快3段灵敏度），
+        //切换鼠标DPI灵敏度
+        pDevContext->bSensitivityChanged = TRUE;//不能直接调用SetNextSensitivity(pDevContext)否则蓝屏
+    }
+           
+
+
+    //开始鼠标事件逻辑判定
+    //注意多手指非同时快速接触触摸板时触摸板报告可能存在一帧中同时新增多个触摸点的情况所以不能用当前只有一个触摸点作为定义指针的判断条件
+    if (tp->nMouse_Pointer_LastIndex == -1 && currentFinger_Count > 0) {//鼠标指针、左键、右键、中键都未定义,
+        //指针触摸点压力、接触面长宽比阈值特征区分判定手掌打字误触和正常操作,压力越小接触面长宽比阈值越大、长度阈值越小
+        for (UCHAR i = 0; i < currentFinger_Count; i++) {
+            if (tp->currentFinger.Contacts[i].Confidence && tp->currentFinger.Contacts[i].TipSwitch) {//不需要tp->currentFinger.Contacts[i].ContactID == 0条件 
+                tp->nMouse_Pointer_CurrentIndex = i;  //首个触摸点作为指针
+                tp->MousePointer_DefineTime = tp->current_Ticktime;//定义当前指针起始时间
+                break;
+            }
+        }     
+    }
+    else if (tp->nMouse_Pointer_CurrentIndex == -1 && tp->nMouse_Pointer_LastIndex != -1) {//指针消失
+        tp->bMouse_Wheel_Mode = FALSE;//结束滚轮模式
+        tp->bMouse_Wheel_Mode_JudgeEnable = TRUE;//开启滚轮判别
+
+        tp->bGestureCompleted = TRUE;//手势模式结束,但tp->bPtpReportCollection不要重置待其他代码来处理
+
+        tp->nMouse_Pointer_CurrentIndex = -1;
+        tp->nMouse_LButton_CurrentIndex = -1;
+        tp->nMouse_RButton_CurrentIndex = -1;
+        tp->nMouse_MButton_CurrentIndex = -1;
+        tp->nMouse_Wheel_CurrentIndex = -1;
+    }
+    else if (tp->nMouse_Pointer_CurrentIndex != -1 && !tp->bMouse_Wheel_Mode) {  //指针已定义的非滚轮事件处理
+        //查找指针左侧或者右侧是否有手指作为滚轮模式或者按键模式，当指针左侧/右侧的手指按下时间与指针手指定义时间间隔小于设定阈值时判定为鼠标滚轮否则为鼠标按键，这一规则能有效区别按键与滚轮操作,但鼠标按键和滚轮不能一起使用
+        //按键定义后会跟踪坐标所以左键和中键不能滑动食指互相切换需要抬起食指后进行改变，左键/中键/右键按下的情况下不能转变为滚轮模式，
+        LARGE_INTEGER MouseButton_Interval;
+        MouseButton_Interval.QuadPart = (tp->current_Ticktime.QuadPart - tp->MousePointer_DefineTime.QuadPart) * tp->tick_Count / 10000;//单位ms毫秒
+        float Mouse_Button_Interval = (float)MouseButton_Interval.LowPart;//指针左右侧的手指按下时间与指针定义起始时间的间隔ms
+
+        if (currentFinger_Count > 1) {//触摸点数量超过1才需要判断按键操作
+            for (char i = 0; i < currentFinger_Count; i++) {
+                if (i == tp->nMouse_Pointer_CurrentIndex || i == tp->nMouse_LButton_CurrentIndex || i == tp->nMouse_RButton_CurrentIndex || i == tp->nMouse_MButton_CurrentIndex || i == tp->nMouse_Wheel_CurrentIndex) {//i为正值所以无需检查索引号是否为-1
+                    continue;  // 已经定义的跳过
+                }
+                float dx = (float)(tp->currentFinger.Contacts[i].X - tp->currentFinger.Contacts[tp->nMouse_Pointer_CurrentIndex].X);
+                float dy = (float)(tp->currentFinger.Contacts[i].Y - tp->currentFinger.Contacts[tp->nMouse_Pointer_CurrentIndex].Y);
+                float distance = (float)(sqrt((double)dx * (double)dx + (double)dy * (double)dy));//触摸点与指针的距离
+
+                BOOLEAN isWheel = FALSE;//滚轮模式成立条件初始化重置，注意bWheelDisabled与bMouse_Wheel_Mode_JudgeEnable的作用不同，不能混淆
+                if (!pDevContext->bWheelDisabled) {//滚轮功能开启时
+                    // 指针左右侧有手指按下并且与指针手指起始定义时间间隔小于阈值，指针被定义后区分滚轮操作只需判断一次直到指针消失，后续按键操作判断不会被时间阈值约束使得响应速度不受影响
+                    isWheel = tp->bMouse_Wheel_Mode_JudgeEnable && absf(distance) > tp->FingerMinDistance && absf(distance) < tp->FingerMaxDistance && Mouse_Button_Interval < ButtonPointer_Interval_MSEC;
+                }
+
+                if (isWheel) {//滚轮模式条件成立
+                    tp->bMouse_Wheel_Mode = TRUE;  //开启滚轮模式
+                    tp->bMouse_Wheel_Mode_JudgeEnable = FALSE;//关闭滚轮判别
+
+                    tp->bGestureCompleted = FALSE; //手势操作结束标志,但tp->bPtpReportCollection不要重置待其他代码来处理
+
+                    tp->nMouse_Wheel_CurrentIndex = i;//滚轮辅助参考手指索引值
+                    //手指变化瞬间时电容可能不稳定指针坐标突发性漂移需要忽略
+                    tp->JitterFixStartTime = tp->current_Ticktime;//抖动修正开始计时
+                    tp->Scroll_TotalDistanceX = 0;//累计滚动位移量重置
+                    tp->Scroll_TotalDistanceY = 0;//累计滚动位移量重置
+
+
+                    tp->nMouse_LButton_CurrentIndex = -1;
+                    tp->nMouse_RButton_CurrentIndex = -1;
+                    tp->nMouse_MButton_CurrentIndex = -1;
+                    break;
+                }
+                else {//前面滚轮模式条件判断已经排除了所以不需要考虑与指针手指起始定义时间间隔，
+                    if (tp->nMouse_MButton_CurrentIndex == -1 && absf(distance) > tp->FingerMinDistance && absf(distance) < tp->FingerClosedThresholdDistance && dx < 0) {//指针左侧有并拢的手指按下
+                        bMouse_MButton_Status = 1; //找到中键
+                        tp->nMouse_MButton_CurrentIndex = i;//赋值中键触摸点新索引号
+                        continue;  //继续找其他按键，食指已经被中键占用所以原则上左键已经不可用
+                    }
+                    else if (tp->nMouse_LButton_CurrentIndex == -1 && absf(distance) > tp->FingerClosedThresholdDistance && absf(distance) < tp->FingerMaxDistance && dx < 0) {//指针左侧有分开的手指按下
+                        bMouse_LButton_Status = 1; //找到左键
+                        tp->nMouse_LButton_CurrentIndex = i;//赋值左键触摸点新索引号
+                        continue;  //继续找其他按键
+                    }
+                    else if (tp->nMouse_RButton_CurrentIndex == -1 && absf(distance) > tp->FingerMinDistance && absf(distance) < tp->FingerMaxDistance && dx > 0) {//指针右侧有手指按下
+                        bMouse_RButton_Status = 1; //找到右键
+                        tp->nMouse_RButton_CurrentIndex = i;//赋值右键触摸点新索引号
+                        continue;  //继续找其他按键
+                    }
+                }
+
+            }
+        }
+
+        KdPrint(("currentFinger_Count =%x\n", currentFinger_Count));
+        KdPrint(("lastFinger_Count =%x\n", lastFinger_Count));
+
+        //鼠标指针位移设置
+        if (currentFinger_Count != lastFinger_Count) {//手指变化瞬间时电容可能不稳定指针坐标突发性漂移需要忽略
+            tp->JitterFixStartTime = tp->current_Ticktime;//抖动修正开始计时
+        }
+        else {
+            LARGE_INTEGER FixTimer;
+            FixTimer.QuadPart = (tp->current_Ticktime.QuadPart - tp->JitterFixStartTime.QuadPart) * tp->tick_Count / 10000;//单位ms毫秒
+            float JitterFixTimer = (float)FixTimer.LowPart;//当前抖动时间计时
+
+            float STABLE_INTERVAL;
+            if (tp->nMouse_MButton_CurrentIndex != -1) {//中键状态下手指并拢的抖动修正值区别处理
+                STABLE_INTERVAL = STABLE_INTERVAL_FingerClosed_MSEC;
+            }
+            else {
+                STABLE_INTERVAL = STABLE_INTERVAL_FingerSeparated_MSEC;
+            }
+
+            SHORT diffX = tp->currentFinger.Contacts[tp->nMouse_Pointer_CurrentIndex].X - tp->lastFinger.Contacts[tp->nMouse_Pointer_LastIndex].X;
+            SHORT diffY = tp->currentFinger.Contacts[tp->nMouse_Pointer_CurrentIndex].Y - tp->lastFinger.Contacts[tp->nMouse_Pointer_LastIndex].Y;
+
+            CHAR px = (CHAR)(diffX / tp->thumb_Scale);
+            CHAR py = (CHAR)(diffY / tp->thumb_Scale);
+
+            if (JitterFixTimer < STABLE_INTERVAL) {//触摸点稳定前修正
+                if (tp->nMouse_LButton_CurrentIndex != -1 || tp->nMouse_RButton_CurrentIndex != -1 || tp->nMouse_MButton_CurrentIndex != -1) {//有按键时修正，单指针时不需要使得指针更精确
+                    if (abs((int)px) <= Jitter_Offset) {//指针轻微抖动修正
+                        px = 0;
+                    }
+                    if (abs((int)py) <= Jitter_Offset) {//指针轻微抖动修正
+                        py = 0;
+                    }
+                }
+            }
+
+            double xx = round(px * pDevContext->MouseSensitivity_Value / tp->PointerSensitivity_x);
+            double yy = round(py * pDevContext->MouseSensitivity_Value / tp->PointerSensitivity_y);
+            KdPrint(("xx =%x\n", (int)px));
+            KdPrint(("yy =%x\n", (int)yy));
+
+            mReport.dx = (CHAR)xx;
+            mReport.dy = (CHAR)yy;
+            KdPrint(("mReport.dx =%x\n", mReport.dx));
+            KdPrint(("mReport.dy =%x\n", mReport.dy));
+
+            if (absd(xx) > 0.5 && absd(xx) < 1) {//慢速精细移动指针修正
+                if (xx > 0) {
+                    mReport.dx = 1;
+                }
+                else {
+                    mReport.dx = -1;
+                }
+                
+            }
+            if (absd(yy) > 0.5 && absd(yy) < 1) {//慢速精细移动指针修正
+                if (xx > 0) {
+                    mReport.dy = 1;
+                }
+                else {
+                    mReport.dy = -1;
+                }
+            }
+        }
+    }
+    else if (tp->nMouse_Pointer_CurrentIndex != -1 && tp->bMouse_Wheel_Mode) {//滚轮操作模式，触摸板双指滑动、三指四指手势也归为此模式下的特例设置一个手势状态开关供后续判断使用
+            tp->bPtpReportCollection = TRUE;//发送PTP触摸板集合报告，后续再做进一步判断
+    }
+    else {
+        //其他组合无效
+    }
+
+
+    if (tp->bPtpReportCollection) {//触摸板集合，手势模式判断
+        if (!tp->bMouse_Wheel_Mode) {//以指针手指释放为滚轮模式结束标志，下一帧bPtpReportCollection会设置FALSE所以只会发送一次构造的手势结束报告
+            tp->bPtpReportCollection = FALSE;//PTP触摸板集合报告模式结束
+            tp->bGestureCompleted = TRUE;//结束手势操作，该数据和bMouse_Wheel_Mode区分开了，因为bGestureCompleted可能会比bMouse_Wheel_Mode提前结束
+            //RegDebug(L"MouseLikeTouchPad_parse bPtpReportCollection bGestureCompleted0", NULL, status);
+
+            //构造全部手指释放的临时数据包,TipSwitch域归零，windows手势操作结束时需要手指离开的点xy坐标数据
+            PTP_REPORT CompletedGestureReport;
+            RtlCopyMemory(&CompletedGestureReport, &tp->currentFinger, sizeof(PTP_REPORT));
+            for (int i = 0; i < currentFinger_Count; i++) {
+                CompletedGestureReport.Contacts[i].TipSwitch = 0;
+            }
+
+            //发送ptp报告
+            RtlZeroMemory(pReportBuffer, *pReportLength);
+            RtlCopyMemory(pReportBuffer, &CompletedGestureReport, sizeof(PTP_REPORT));
+
+
+        }
+        else if (tp->bMouse_Wheel_Mode && currentFinger_Count == 1 && !tp->bGestureCompleted) {//滚轮模式未结束并且剩下指针手指留在触摸板上,需要配合bGestureCompleted标志判断使得构造的手势结束报告只发送一次
+            tp->bPtpReportCollection = FALSE;//PTP触摸板集合报告模式结束
+            tp->bGestureCompleted = TRUE;//提前结束手势操作，该数据和bMouse_Wheel_Mode区分开了，因为bGestureCompleted可能会比bMouse_Wheel_Mode提前结束
+            //RegDebug(L"MouseLikeTouchPad_parse bPtpReportCollection bGestureCompleted1", NULL, status);
+
+            //构造指针手指释放的临时数据包,TipSwitch域归零，windows手势操作结束时需要手指离开的点xy坐标数据
+            PTP_REPORT CompletedGestureReport2;
+            RtlCopyMemory(&CompletedGestureReport2, &tp->currentFinger, sizeof(PTP_REPORT));
+            CompletedGestureReport2.Contacts[0].TipSwitch = 0;
+
+            //发送ptp报告
+            RtlZeroMemory(pReportBuffer, *pReportLength);
+            RtlCopyMemory(pReportBuffer, &CompletedGestureReport2, sizeof(PTP_REPORT));
+        }
+
+        if (!tp->bGestureCompleted) {//手势未结束，正常发送报告
+            //RegDebug(L"MouseLikeTouchPad_parse bPtpReportCollection bGestureCompleted2", NULL, status);
+            //发送ptp报告
+            //不改变pReportBuffer数据
+            //RegDebug(L"MouseLikeTouchPad_parse SendPtpMultiTouchReport CompletedGestureReport ok", NULL, status);
+        }
+    }
+    else {//发送MouseCollection
+        mReport.button = bMouse_LButton_Status + (bMouse_RButton_Status << 1) + (bMouse_MButton_Status << 2) + (bMouse_BButton_Status << 3) + (bMouse_FButton_Status << 4);  //左中右后退前进键状态合成
+        //发送鼠标报告
+        RtlZeroMemory(pReportBuffer, *pReportLength);
+        *pReportLength = sizeof(mReport);
+        RtlCopyMemory(pReportBuffer, &mReport, sizeof(mReport));
+    }
+
+
+    //保存下一轮所有触摸点的初始坐标及功能定义索引号
+    tp->lastFinger = tp->currentFinger;
+
+    lastFinger_Count = currentFinger_Count;
+    tp->nMouse_Pointer_LastIndex = tp->nMouse_Pointer_CurrentIndex;
+    tp->nMouse_LButton_LastIndex = tp->nMouse_LButton_CurrentIndex;
+    tp->nMouse_RButton_LastIndex = tp->nMouse_RButton_CurrentIndex;
+    tp->nMouse_MButton_LastIndex = tp->nMouse_MButton_CurrentIndex;
+    tp->nMouse_Wheel_LastIndex = tp->nMouse_Wheel_CurrentIndex;
+
+}
+
+
+
+
+
+VOID MouseLikeTouchPad_parse_init(PHID_MINI_DEV_EXTENSION pDevContext)
+{
+    PTP_PARSER* tp = &pDevContext->tp_settings;
+
+    tp->nMouse_Pointer_CurrentIndex = -1; //定义当前鼠标指针触摸点坐标的数据索引号，-1为未定义
+    tp->nMouse_LButton_CurrentIndex = -1; //定义当前鼠标左键触摸点坐标的数据索引号，-1为未定义
+    tp->nMouse_RButton_CurrentIndex = -1; //定义当前鼠标右键触摸点坐标的数据索引号，-1为未定义
+    tp->nMouse_MButton_CurrentIndex = -1; //定义当前鼠标中键触摸点坐标的数据索引号，-1为未定义
+    tp->nMouse_Wheel_CurrentIndex = -1; //定义当前鼠标滚轮辅助参考手指触摸点坐标的数据索引号，-1为未定义
+
+    tp->nMouse_Pointer_LastIndex = -1; //定义上次鼠标指针触摸点坐标的数据索引号，-1为未定义
+    tp->nMouse_LButton_LastIndex = -1; //定义上次鼠标左键触摸点坐标的数据索引号，-1为未定义
+    tp->nMouse_RButton_LastIndex = -1; //定义上次鼠标右键触摸点坐标的数据索引号，-1为未定义
+    tp->nMouse_MButton_LastIndex = -1; //定义上次鼠标中键触摸点坐标的数据索引号，-1为未定义
+    tp->nMouse_Wheel_LastIndex = -1; //定义上次鼠标滚轮辅助参考手指触摸点坐标的数据索引号，-1为未定义
+
+    pDevContext->bWheelDisabled = FALSE;//默认初始值为开启滚轮操作功能
+
+
+    tp->bMouse_Wheel_Mode = FALSE;
+    tp->bMouse_Wheel_Mode_JudgeEnable = TRUE;//开启滚轮判别
+
+    tp->bGestureCompleted = FALSE; //手势操作结束标志
+    tp->bPtpReportCollection = FALSE;//默认鼠标集合
+
+    RtlZeroMemory(&tp->lastFinger, sizeof(PTP_REPORT));
+    RtlZeroMemory(&tp->currentFinger, sizeof(PTP_REPORT));
+
+    tp->Scroll_TotalDistanceX = 0;
+    tp->Scroll_TotalDistanceY = 0;
+
+    tp->tick_Count = KeQueryTimeIncrement();
+
+
+}
+
+
+void SetNextSensitivity(PHID_MINI_DEV_EXTENSION pDevContext)
+{
+    ULONG ms_idx = pDevContext->MouseSensitivity_Index;// MouseSensitivity_Normal;//MouseSensitivity_Slow//MouseSensitivity_FAST
+
+    ms_idx++;
+    if (ms_idx == 3) {//灵敏度循环设置
+        ms_idx = 0;
+    }
+
+    //保存注册表灵敏度设置数值
+    NTSTATUS status = SetRegisterMouseSensitivity(pDevContext, ms_idx);//MouseSensitivityTable存储表的序号值
+    if (!NT_SUCCESS(status))
+    {
+        //RegDebug(L"SetNextSensitivity SetRegisterMouseSensitivity err", NULL, status);
+        return;
+    }
+
+    pDevContext->MouseSensitivity_Index = ms_idx;
+    pDevContext->MouseSensitivity_Value = MouseSensitivityTable[ms_idx];
+    //RegDebug(L"SetNextSensitivity pDevContext->MouseSensitivity_Index", NULL, pDevContext->MouseSensitivity_Index);
+
+    //RegDebug(L"SetNextSensitivity ok", NULL, status);
+}
+
+
+NTSTATUS SetRegisterMouseSensitivity(PHID_MINI_DEV_EXTENSION pDevContext, ULONG ms_idx)//保存设置到注册表
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    WDFDEVICE device = pDevContext->FxDevice;
+
+    DECLARE_CONST_UNICODE_STRING(ValueNameString, L"MouseSensitivity_Index");
+
+    WDFKEY hKey = NULL;
+
+    status = WdfDeviceOpenRegistryKey(
+        device,
+        PLUGPLAY_REGKEY_DEVICE,//1
+        KEY_WRITE,
+        WDF_NO_OBJECT_ATTRIBUTES,
+        &hKey);
+
+    if (NT_SUCCESS(status)) {
+        status = WdfRegistryAssignULong(hKey, &ValueNameString, ms_idx);
+        if (!NT_SUCCESS(status)) {
+            //RegDebug(L"SetRegisterMouseSensitivity WdfRegistryAssignULong err", NULL, status);
+            return status;
+        }
+    }
+
+    if (hKey) {
+        WdfObjectDelete(hKey);
+    }
+
+    //RegDebug(L"SetRegisterMouseSensitivity ok", NULL, status);
+    return status;
+}
+
+
+
+NTSTATUS GetRegisterMouseSensitivity(PHID_MINI_DEV_EXTENSION pDevContext, ULONG* ms_idx)//从注册表读取设置
+{
+
+    NTSTATUS status = STATUS_SUCCESS;
+    WDFDEVICE device = pDevContext->FxDevice;
+
+    WDFKEY hKey = NULL;
+    *ms_idx = 0;
+
+    DECLARE_CONST_UNICODE_STRING(ValueNameString, L"MouseSensitivity_Index");
+
+    status = WdfDeviceOpenRegistryKey(
+        device,
+        PLUGPLAY_REGKEY_DEVICE,//1
+        KEY_READ,
+        WDF_NO_OBJECT_ATTRIBUTES,
+        &hKey);
+
+    if (NT_SUCCESS(status))
+    {
+        status = WdfRegistryQueryULong(hKey, &ValueNameString, ms_idx);
+    }
+    else {
+        //RegDebug(L"GetRegisterMouseSensitivity err", NULL, status);
+    }
+
+    if (hKey) {
+        WdfObjectDelete(hKey);
+    }
+
+    //RegDebug(L"GetRegisterMouseSensitivity end", NULL, status);
     return status;
 }
 
