@@ -18,6 +18,7 @@ static __forceinline double absd(double x)
     return x;
 }
 
+ULONG order = 0;
 NTSTATUS HumInternalIoctl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
 {
     NTSTATUS                status;
@@ -47,6 +48,8 @@ NTSTATUS HumInternalIoctl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
     pDevExt = (PHID_DEVICE_EXTENSION)pDevObj->DeviceExtension;
     pMiniDevExt = (PHID_MINI_DEV_EXTENSION)pDevExt->MiniDeviceExtension;
     NeedCompleteIrp = TRUE;
+
+    KdPrint(("HumInternalIoctl pDevObj=%wZ", pDevObj->DriverObject->DriverName));
 
     status = IoAcquireRemoveLockEx(&pMiniDevExt->RemoveLock, pIrp, __FILE__, __LINE__, sizeof(pMiniDevExt->RemoveLock));
     if (NT_SUCCESS(status) == FALSE)
@@ -285,11 +288,6 @@ NTSTATUS HumInternalIoctl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
     {
         runtimes_IOCTL_HID_READ_REPORT++;
         //RegDebug(L"HumInternalIoctl IOCTL_HID_READ_REPORT", NULL, runtimes_IOCTL_HID_READ_REPORT);
-
-        if (pMiniDevExt->bSensitivityChanged) {
-            SetNextSensitivity(pMiniDevExt);//循环设置灵敏度
-            pMiniDevExt->bSensitivityChanged = FALSE;
-        }
 
         pUserBuffer = pIrp->UserBuffer;
         OutBuffLen = pStack->Parameters.DeviceIoControl.OutputBufferLength;
@@ -783,11 +781,7 @@ NTSTATUS HumInitDevice(PDEVICE_OBJECT pDevObj)
     pDevExt = (PHID_DEVICE_EXTENSION)pDevObj->DeviceExtension;
     pMiniDevExt = (PHID_MINI_DEV_EXTENSION)pDevExt->MiniDeviceExtension;
 
-
-    pMiniDevExt->MouseSensitivity_Index = 1;
-    GetRegisterMouseSensitivity(pMiniDevExt, &pMiniDevExt->MouseSensitivity_Index);
-    pMiniDevExt->MouseSensitivity_Value= MouseSensitivityTable[pMiniDevExt->MouseSensitivity_Index];
-    pMiniDevExt->bSensitivityChanged = FALSE;
+    KdPrint(("HumInitDevice pDevObj=%wZ", pDevObj->DriverObject->DriverName));
 
 
     MouseLikeTouchPad_parse_init(pMiniDevExt);
@@ -1290,6 +1284,9 @@ NTSTATUS HumAddDevice(PDRIVER_OBJECT pDrvObj, PDEVICE_OBJECT pFdo)
     HID_MINI_DEV_EXTENSION *pMiniDevExt;
 
     UNREFERENCED_PARAMETER(pDrvObj);
+    KdPrint(("HumAddDevice order=%x\n", order++));
+    KdPrint(("HumAddDevice pDrvObj pDevObj=%wZ", pDrvObj->DeviceObject->DriverObject->DriverName));
+    KdPrint(("HumAddDevice pFdo pDevObj=%wZ", pFdo->DriverObject->DriverName));
 
     pDevExt = (PHID_DEVICE_EXTENSION)pFdo->DeviceExtension;
     pMiniDevExt = (PHID_MINI_DEV_EXTENSION)pDevExt->MiniDeviceExtension;
@@ -1300,9 +1297,9 @@ NTSTATUS HumAddDevice(PDRIVER_OBJECT pDrvObj, PDEVICE_OBJECT pFdo)
     pMiniDevExt->PnpState = 0;
     pMiniDevExt->pFdo = pFdo;
 
-    
-    //WDFDEVICE device = WdfWdmDeviceGetWdfDeviceHandle(pDevExt->NextDeviceObject);//??
-    //pMiniDevExt->FxDevice = device;
+    pMiniDevExt->PDO = pDevExt->PhysicalDeviceObject;
+    KdPrint(("HumAddDevice PDO pDevObj=%wZ", pMiniDevExt->PDO->DriverObject->DriverName));
+
     IoInitializeRemoveLockEx(&pMiniDevExt->RemoveLock, HID_USB_TAG, 2, 0, sizeof(pMiniDevExt->RemoveLock));
 
     runtimes_IOCTL_IOCTL = 0;
@@ -1924,6 +1921,7 @@ NTSTATUS HumPnP(PDEVICE_OBJECT pDevObj, PIRP pIrp)
     PIO_STACK_LOCATION          pStack;
     KEVENT                      Event;
     PHID_DEVICE_EXTENSION       pDevExt;
+    //KdPrint(("HumPnP order=%x\n", order++));
 
     pDevExt = (PHID_DEVICE_EXTENSION)pDevObj->DeviceExtension;
     pMiniDevExt = (PHID_MINI_DEV_EXTENSION)pDevExt->MiniDeviceExtension;
@@ -2276,7 +2274,7 @@ NTSTATUS HumAbortPendingRequests(PDEVICE_OBJECT pDevObj)
 
 NTSTATUS HumRemoveDevice(PDEVICE_OBJECT pDevObj, PIRP pIrp)
 {
-    RegDebug(L"HumRemoveDevice", NULL, runtimes_IOCTL_IOCTL);
+    //RegDebug(L"HumRemoveDevice", NULL, runtimes_IOCTL_IOCTL);
     NTSTATUS                status;
     PHID_MINI_DEV_EXTENSION pMiniDevExt;
     ULONG                   PrevPnpState;
@@ -2893,9 +2891,8 @@ VOID MouseLikeTouchPad_parse(PHID_MINI_DEV_EXTENSION pDevContext, PBYTE pReportB
     //RegDebug(L"MouseLikeTouchPad_parse pDevContext->bHybrid_ReportingMode=", NULL, pDevContext->bHybrid_ReportingMode);
 
 
-    if (currentFinger_Count == 5) {//5指轻触触控板为调节鼠标灵敏度（慢/中等/快3段灵敏度），
-        //切换鼠标DPI灵敏度
-        pDevContext->bSensitivityChanged = TRUE;//不能直接调用SetNextSensitivity(pDevContext)否则蓝屏
+    if (currentFinger_Count == 5) {//5指轻触触控板
+
     }
            
 
@@ -3022,8 +3019,8 @@ VOID MouseLikeTouchPad_parse(PHID_MINI_DEV_EXTENSION pDevContext, PBYTE pReportB
                 }
             }
 
-            double xx = round(px * pDevContext->MouseSensitivity_Value / tp->PointerSensitivity_x);
-            double yy = round(py * pDevContext->MouseSensitivity_Value / tp->PointerSensitivity_y);
+            double xx = round(px / tp->PointerSensitivity_x);
+            double yy = round(py / tp->PointerSensitivity_y);
             KdPrint(("xx =%x\n", (int)px));
             KdPrint(("yy =%x\n", (int)yy));
 
@@ -3159,99 +3156,5 @@ VOID MouseLikeTouchPad_parse_init(PHID_MINI_DEV_EXTENSION pDevContext)
     tp->tick_Count = KeQueryTimeIncrement();
 
 
-}
-
-
-void SetNextSensitivity(PHID_MINI_DEV_EXTENSION pDevContext)
-{
-    ULONG ms_idx = pDevContext->MouseSensitivity_Index;// MouseSensitivity_Normal;//MouseSensitivity_Slow//MouseSensitivity_FAST
-
-    ms_idx++;
-    if (ms_idx == 3) {//灵敏度循环设置
-        ms_idx = 0;
-    }
-
-    //保存注册表灵敏度设置数值
-    NTSTATUS status = SetRegisterMouseSensitivity(pDevContext, ms_idx);//MouseSensitivityTable存储表的序号值
-    if (!NT_SUCCESS(status))
-    {
-        //RegDebug(L"SetNextSensitivity SetRegisterMouseSensitivity err", NULL, status);
-        return;
-    }
-
-    pDevContext->MouseSensitivity_Index = ms_idx;
-    pDevContext->MouseSensitivity_Value = MouseSensitivityTable[ms_idx];
-    //RegDebug(L"SetNextSensitivity pDevContext->MouseSensitivity_Index", NULL, pDevContext->MouseSensitivity_Index);
-
-    //RegDebug(L"SetNextSensitivity ok", NULL, status);
-}
-
-
-NTSTATUS SetRegisterMouseSensitivity(PHID_MINI_DEV_EXTENSION pDevContext, ULONG ms_idx)//保存设置到注册表
-{
-    NTSTATUS status = STATUS_SUCCESS;
-    WDFDEVICE device = pDevContext->FxDevice;
-
-    DECLARE_CONST_UNICODE_STRING(ValueNameString, L"MouseSensitivity_Index");
-
-    WDFKEY hKey = NULL;
-
-    status = WdfDeviceOpenRegistryKey(
-        device,
-        PLUGPLAY_REGKEY_DEVICE,//1
-        KEY_WRITE,
-        WDF_NO_OBJECT_ATTRIBUTES,
-        &hKey);
-
-    if (NT_SUCCESS(status)) {
-        status = WdfRegistryAssignULong(hKey, &ValueNameString, ms_idx);
-        if (!NT_SUCCESS(status)) {
-            //RegDebug(L"SetRegisterMouseSensitivity WdfRegistryAssignULong err", NULL, status);
-            return status;
-        }
-    }
-
-    if (hKey) {
-        WdfObjectDelete(hKey);
-    }
-
-    //RegDebug(L"SetRegisterMouseSensitivity ok", NULL, status);
-    return status;
-}
-
-
-
-NTSTATUS GetRegisterMouseSensitivity(PHID_MINI_DEV_EXTENSION pDevContext, ULONG* ms_idx)//从注册表读取设置
-{
-
-    NTSTATUS status = STATUS_SUCCESS;
-    WDFDEVICE device = pDevContext->FxDevice;
-
-    WDFKEY hKey = NULL;
-    *ms_idx = 0;
-
-    DECLARE_CONST_UNICODE_STRING(ValueNameString, L"MouseSensitivity_Index");
-
-    status = WdfDeviceOpenRegistryKey(
-        device,
-        PLUGPLAY_REGKEY_DEVICE,//1
-        KEY_READ,
-        WDF_NO_OBJECT_ATTRIBUTES,
-        &hKey);
-
-    if (NT_SUCCESS(status))
-    {
-        status = WdfRegistryQueryULong(hKey, &ValueNameString, ms_idx);
-    }
-    else {
-        //RegDebug(L"GetRegisterMouseSensitivity err", NULL, status);
-    }
-
-    if (hKey) {
-        WdfObjectDelete(hKey);
-    }
-
-    //RegDebug(L"GetRegisterMouseSensitivity end", NULL, status);
-    return status;
 }
 

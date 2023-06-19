@@ -48,8 +48,6 @@ const ULONG DEXT_NO_HID_DESC = 0x1;
 
 CHAR UnitExponent_Table[16] = { 0,1,2,3,4,5,6,7,-8,-7,-6,-5,-4,-3,-2,1 };
 
-double MouseSensitivityTable[3] = { 0.8,1.0,1.25 };
-
 
 ///鼠标状态报告,对应的HID是上边的报告
 #pragma pack(1)
@@ -216,7 +214,7 @@ struct _HID_MINI_DEV_EXTENSION
     PDEVICE_OBJECT pFdo;
     IO_REMOVE_LOCK RemoveLock;
 
-    WDFDEVICE FxDevice;//
+    PDEVICE_OBJECT PDO;
 
     PUSB_DEVICE_DESCRIPTOR pUsbDeviceDescriptorGlobal;
     PUSB_CONFIGURATION_DESCRIPTOR pConfigDescGlobal;
@@ -234,23 +232,15 @@ struct _HID_MINI_DEV_EXTENSION
     UCHAR   GetStringStep;
 
     BOOLEAN PtpInputModeOn;
-    BOOLEAN bFoundRegCurrentUserSID;
-    BOOLEAN bSetAAPThresholdOK;
+
 
     //MouseLikeTouchpad Paser context
     PTP_PARSER  tp_settings;  //PTP_PARSER数据
     HIDDESC_SETTING desc_settings;
 
-    ULONG MouseSensitivity_Index;
-    double MouseSensitivity_Value;
-
     BOOLEAN bWheelDisabled;//当前滚轮功能开启关闭状态
-    BOOLEAN bSensitivityChanged;
-
 
     BOOLEAN bMouseLikeTouchPad_Mode;//切换仿鼠标式触摸板与windows原版的PTP精确式触摸板操作方式
-
-    UNICODE_STRING strCurrentUserSID;//当前登录用户的SID
 
 } HID_MINI_DEV_EXTENSION, * PHID_MINI_DEV_EXTENSION;
 
@@ -934,10 +924,6 @@ CONST HID_DESCRIPTOR DefaultHidDescriptor = {
 
 NTSTATUS
 AnalyzeHidReportDescriptor(PHID_MINI_DEV_EXTENSION pDevContext);
-
-void SetNextSensitivity(PHID_MINI_DEV_EXTENSION pDevContext);
-NTSTATUS SetRegisterMouseSensitivity(PHID_MINI_DEV_EXTENSION pDevContext, ULONG ms_idx);
-NTSTATUS GetRegisterMouseSensitivity(PHID_MINI_DEV_EXTENSION pDevContext, ULONG* ms_idx);
 
 VOID MouseLikeTouchPad_parse_init(PHID_MINI_DEV_EXTENSION pDevContext);
 VOID MouseLikeTouchPad_parse(PHID_MINI_DEV_EXTENSION pDevContext, PBYTE pReportBuffer, PULONG pReportLength);

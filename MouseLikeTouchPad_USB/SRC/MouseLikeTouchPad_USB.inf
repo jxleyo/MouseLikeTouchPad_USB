@@ -26,7 +26,7 @@ DefaultDestDir = 12
 
 [Standard.NT$ARCH$]
 %MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_048D&PID_8911&REV_1001&MI_01;,GENERIC_HID_DEVICE,USB\Class_03&SubClass_01,USB\Class_03
-;%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_1BCF&PID_0005&REV_0090
+%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\MLTP_USB;
 
 ;=====================================================================
 [MouseLikeTouchPad_USB.NT]
@@ -53,6 +53,7 @@ HKR,,"DeviceResetNotificationEnabled",0x00010001,0;;∫‹πÿº¸…Ë÷√£¨±ÿ–Î÷√0£¨∑Ò‘Ú…Ë±
 [MouseLikeTouchPad_USB.DelReg.NT.HW]
 ; Remove the ExtPropDescSemaphore flag in case it is present from a previous install
 HKR,,"ExtPropDescSemaphore"
+
 
 [MouseLikeTouchPad_USB.CopyFiles.NT]
 MouseLikeTouchPad_USB.sys,,,0x100
