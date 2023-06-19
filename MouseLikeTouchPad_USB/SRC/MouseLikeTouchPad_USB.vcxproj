@@ -184,6 +184,9 @@
   <ItemGroup>
     <ClInclude Include="MouseLikeTouchPad_USB.h" />
   </ItemGroup>
+  <ItemGroup>
+    <Resource Include="MouseLikeTouchPad_USB.res" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

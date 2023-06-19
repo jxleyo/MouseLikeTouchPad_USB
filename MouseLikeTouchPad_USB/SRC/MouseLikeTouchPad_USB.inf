@@ -7,9 +7,9 @@ Signature="$WINDOWS NT$"
 Class=HIDClass
 ClassGuid={745a17a0-74d3-11d0-b6fe-00a0c90f57da}
 Provider    = %ProviderName%
-DriverVer=06/21/2006,10.0.14393.351
 CatalogFile=MouseLikeTouchPad_USB.cat
 PnpLockdown=1
+DriverVer=07/17/2023,1.0.1.0
 
 
 [SourceDisksFiles]
