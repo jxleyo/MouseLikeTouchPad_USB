@@ -2780,11 +2780,11 @@ VOID MouseLikeTouchPad_parse(PHID_MINI_DEV_EXTENSION pDevContext, PBYTE pReportB
    
     //所有手指触摸点的索引号跟踪
     for (char i = 0; i < MAX_CONTACT_FINGER; i++) {//必须搜索全部点的Contacts数据因为可能有效的点数据排列顺序不在靠前位置
-        KdPrint(("currentfinger Contact[%x].Confidence = %x\n", i,tp->currentFinger.Contacts[i].Confidence));
-        KdPrint(("currentfinger Contact[%x].ContactID = %x\n", i, tp->currentFinger.Contacts[i].ContactID));
-        KdPrint(("currentfinger Contact[%x].TipSwitch = %x\n", i, tp->currentFinger.Contacts[i].TipSwitch));
-        KdPrint(("currentfinger Contact[%x].X = %x\n", i, tp->currentFinger.Contacts[i].X));
-        KdPrint(("currentfinger Contact[%x].Y = %x\n", i, tp->currentFinger.Contacts[i].Y));
+        //KdPrint(("currentfinger Contact[%x].Confidence = %x\n", i,tp->currentFinger.Contacts[i].Confidence));
+        //KdPrint(("currentfinger Contact[%x].ContactID = %x\n", i, tp->currentFinger.Contacts[i].ContactID));
+        //KdPrint(("currentfinger Contact[%x].TipSwitch = %x\n", i, tp->currentFinger.Contacts[i].TipSwitch));
+        //KdPrint(("currentfinger Contact[%x].X = %x\n", i, tp->currentFinger.Contacts[i].X));
+        //KdPrint(("currentfinger Contact[%x].Y = %x\n", i, tp->currentFinger.Contacts[i].Y));
 
         if (!tp->currentFinger.Contacts[i].Confidence || !tp->currentFinger.Contacts[i].TipSwitch) {
             //必须判断Confidence和TipSwitch，已经释放的点数据很大可能依然存在ContactID和XY信息
@@ -2840,8 +2840,10 @@ VOID MouseLikeTouchPad_parse(PHID_MINI_DEV_EXTENSION pDevContext, PBYTE pReportB
 
     KdPrint(("nMouse_Pointer_CurrentIndex = %x\n", tp->nMouse_Pointer_CurrentIndex));
     KdPrint(("nMouse_Pointer_LastIndex = %x\n", tp->nMouse_Pointer_LastIndex));
-    KdPrint(("lastFinger tp->nMouse_Pointer_LastIndex Contact[%x].ContactID = %x\n", tp->nMouse_Pointer_LastIndex, tp->lastFinger.Contacts[tp->nMouse_Pointer_LastIndex].ContactID));
-
+    if (tp->nMouse_Pointer_LastIndex != -1) {
+        KdPrint(("lastFinger tp->nMouse_Pointer_LastIndex Contact[%x].ContactID = %x\n", tp->nMouse_Pointer_LastIndex, tp->lastFinger.Contacts[tp->nMouse_Pointer_LastIndex].ContactID));
+    }
+  
 
     KdPrint(("MouseLikeTouchPad_parse traced currentFinger_Count=,%x\n", currentFinger_Count));
 
