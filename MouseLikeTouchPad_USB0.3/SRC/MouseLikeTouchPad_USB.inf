@@ -53,6 +53,8 @@ HKR,,"WriteReportExSupported",0x00010001,0x1
 HKR,,"DeviceResetNotificationEnabled",0x00010001,0;;很关键设置，必须置0，否则设备Reset通知消息导致系统无法处理鼠标和触控板输入事件
 ;HKR,,"DoNotWaitForResetResponse",0x00010001,0;
 
+HKR,,"MouseSensitivity_Index",0x00010001,1
+
 ; Empty section (only exists to maintain compatibility with external INF files)
 ;
 [MouseLikeTouchPad_USB.DelReg.NT.HW]

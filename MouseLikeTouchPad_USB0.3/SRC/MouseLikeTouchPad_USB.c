@@ -72,7 +72,6 @@ NTSTATUS HumInternalIoctl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
     IoControlCode = pStack->Parameters.DeviceIoControl.IoControlCode;
 
 
-
     switch (IoControlCode)
     {
     case IOCTL_HID_GET_STRING:
@@ -793,32 +792,9 @@ NTSTATUS HumInitDevice(PDEVICE_OBJECT pDevObj)
 
     KdPrint(("HumInitDevice pDevObj=%wZ", pDevObj->DriverObject->DriverName));
 
-
-    MouseLikeTouchPad_parse_init(pMiniDevExt);
-
     status = HumGetDeviceDescriptor(pDevObj, pMiniDevExt);
     if (NT_SUCCESS(status) == FALSE)
     {
-        /*
-        if ((unsigned int)dword_16008 > 5)
-        {
-        if (!_TlgKeywordOn(v13, v14))
-        return status;
-        v9 = "PNP_DeviceDesc";
-        v21 = &TransferrBufferLen;
-        v28 = 0;
-        v27 = 4;
-        v26 = 0;
-        v25 = &pMiniDevExt;
-        v24 = 0;
-        v23 = 4;
-        v22 = 0;
-        TransferrBufferLen = status;
-        _TlgCreateSz((const CHAR **)&v29, v9);
-        _TlgWrite(v10, (unsigned __int8 *)&unk_1521F, v11, v12, 5, &v20);
-        return status;
-        }
-        */
         KdPrint(("HumInitDevice HumGetDeviceDescriptor err,%x\n",  status));
     }
     else
@@ -844,6 +820,43 @@ NTSTATUS HumInitDevice(PDEVICE_OBJECT pDevObj)
             ExFreePool(pConfigDescr);
         }
     }
+
+
+    pMiniDevExt->SensitivityChanged = FALSE;
+    pMiniDevExt->ButtonDown = FALSE;
+
+    pMiniDevExt->MouseSensitivity_Index = 1;//默认初始值为MouseSensitivityTable存储表的序号1项
+    pMiniDevExt->MouseSensitivity_Value = MouseSensitivityTable[pMiniDevExt->MouseSensitivity_Index];//默认初始值为1.0
+
+    //读取鼠标灵敏度设置
+    ULONG ms_idx;
+    status = GetRegisterMouseSensitivity(pMiniDevExt, &ms_idx);
+    if (!NT_SUCCESS(status))
+    {
+        if (status == STATUS_OBJECT_NAME_NOT_FOUND)//     ((NTSTATUS)0xC0000034L)
+        {
+            KdPrint(("OnPrepareHardware GetRegisterMouseSensitivity STATUS_OBJECT_NAME_NOT_FOUND,%x\n", status));
+            status = SetRegisterMouseSensitivity(pMiniDevExt, pMiniDevExt->MouseSensitivity_Index);//初始默认设置
+            if (!NT_SUCCESS(status)) {
+                KdPrint(("OnPrepareHardware SetRegisterMouseSensitivity err,%x\n", status));
+            }
+        }
+        else
+        {
+            KdPrint(("OnPrepareHardware GetRegisterMouseSensitivity err,%x\n", status));
+        }
+    }
+    else {
+        if (ms_idx > 2) {//如果读取的数值错误
+            ms_idx = pMiniDevExt->MouseSensitivity_Index;//恢复初始默认值
+        }
+        pMiniDevExt->MouseSensitivity_Index = (UCHAR)ms_idx;
+        pMiniDevExt->MouseSensitivity_Value = MouseSensitivityTable[pMiniDevExt->MouseSensitivity_Index];
+        KdPrint(("OnPrepareHardware GetRegisterMouseSensitivity MouseSensitivity_Index=,%x\n", pMiniDevExt->MouseSensitivity_Index));
+    }
+
+    MouseLikeTouchPad_parse_init(pMiniDevExt);
+
     return status;
 }
 
@@ -2365,6 +2378,8 @@ NTSTATUS HumStopDevice(PDEVICE_OBJECT pDevObj)
 
     pMiniDevExt->PnpState = 4;
 
+
+
     return status;
 }
 
@@ -2373,6 +2388,7 @@ NTSTATUS HumSystemControl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
     PHID_DEVICE_EXTENSION pDevExt;
 
     pDevExt = (PHID_DEVICE_EXTENSION)pDevObj->DeviceExtension;
+
     IoCopyCurrentIrpStackLocationToNext(pIrp);
     return IoCallDriver(pDevExt->NextDeviceObject, pIrp);
 }
@@ -2849,9 +2865,17 @@ VOID MouseLikeTouchPad_parse(PHID_MINI_DEV_EXTENSION pDevContext, PBYTE pReportB
 
 
     if (currentFinger_Count == 5) {//5指轻触触控板
-
+        pDevContext->ButtonDown= TRUE;     
+        pDevContext->SensitivityChanged = TRUE;
     }
-           
+    else {
+        pDevContext->ButtonDown = FALSE;
+    }
+    
+    //if (!pDevContext->ButtonDown && pDevContext->SensitivityChanged) {
+    //    pDevContext->SensitivityChanged = FALSE;
+    //    SetNextSensitivity(pDevContext);
+    //}
 
 
     //开始鼠标事件逻辑判定
@@ -3124,4 +3148,121 @@ VOID KdPrintDataFun(CHAR* pChars, PUCHAR DataBuffer, ULONG DataSize)
         DbgPrint("% x,", DataBuffer[i]);
     }
     DbgPrint("\n");
+}
+
+
+NTSTATUS SetRegisterMouseSensitivity(PHID_MINI_DEV_EXTENSION pMiniDevExt, ULONG ms_idx)//保存设置到注册表
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    //
+    HANDLE devInstRegKey;
+    status = IoOpenDeviceRegistryKey(pMiniDevExt->PDO->NextDevice,
+                                     PLUGPLAY_REGKEY_DEVICE,//PLUGPLAY_REGKEY_DEVICE//PLUGPLAY_REGKEY_DRIVER
+                                     STANDARD_RIGHTS_ALL,
+                                     &devInstRegKey);
+    if (!NT_SUCCESS(status)) {
+        KdPrint(("IoOpenDeviceRegistryKey failed, % x\n", status));
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    UNICODE_STRING  ValueNameString;
+    RtlInitUnicodeString(&ValueNameString, L"MouseSensitivity_Index");
+
+    ULONG Value = ms_idx;
+
+    status = ZwSetValueKey(devInstRegKey, &ValueNameString, 0, REG_DWORD, &Value, sizeof(ULONG));
+
+    if (!NT_SUCCESS(status)) {
+        KdPrint(("SetRegisterMouseSensitivity ZwSetValueKey failed,%x\n", status));
+    }
+
+    ZwClose(devInstRegKey);
+    KdPrint(("SetRegisterMouseSensitivity ok,%x\n", status));
+    return status;
+}
+
+
+
+NTSTATUS GetRegisterMouseSensitivity(PHID_MINI_DEV_EXTENSION pMiniDevExt, ULONG* ms_idx)//从注册表读取设置
+{
+
+    NTSTATUS status = STATUS_SUCCESS;
+    ULONG Value = 1;//默认值
+
+    //
+    HANDLE devInstRegKey;
+    status = IoOpenDeviceRegistryKey(pMiniDevExt->PDO->NextDevice,
+                                     PLUGPLAY_REGKEY_DEVICE,//PLUGPLAY_REGKEY_DEVICE//PLUGPLAY_REGKEY_DRIVER
+                                     STANDARD_RIGHTS_ALL,
+                                     &devInstRegKey);
+    if (!NT_SUCCESS(status)) {
+        KdPrint(("GetRegisterMouseSensitivity IoOpenDeviceRegistryKey failed, % x\n", status));
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    UNICODE_STRING  ValueNameString;
+    RtlInitUnicodeString(&ValueNameString, L"MouseSensitivity_Index");
+
+    ULONG length;			// 接受长度的变量
+
+    ZwQueryValueKey(devInstRegKey, &ValueNameString, KeyValuePartialInformation, NULL, 0, &length);		// 首先查询实际只是要求出实际需要的字节数
+
+    PKEY_VALUE_PARTIAL_INFORMATION keyInfo =(PKEY_VALUE_PARTIAL_INFORMATION)(ExAllocatePoolWithTag(PagedPool, length, HID_USB_TAG));
+    if (keyInfo == NULL)
+    {
+        KdPrint(("GetRegisterMouseSensitivity ExAllocatePoolWithTag failed,%x\n", status));
+        ZwClose(devInstRegKey);
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    // 再次查询获取信息
+    status = ZwQueryValueKey(devInstRegKey, &ValueNameString, KeyValuePartialInformation, keyInfo, length, &length);
+    if (!NT_SUCCESS(status))
+    {
+        KdPrint(("GetRegisterMouseSensitivity ZwQueryValueKey failed,%x\n", status));
+        goto Exit;
+    }
+
+    Value = *((ULONG*)(keyInfo->Data));
+    if (Value>2) {
+        KdPrint(("GetRegisterMouseSensitivity ZwQueryValueKey errValue,%x\n", status));
+        status = STATUS_UNSUCCESSFUL;
+        goto Exit;
+    }
+
+    *ms_idx = Value;
+
+
+Exit:
+    ExFreePoolWithTag(keyInfo, HID_USB_TAG);		// 释放动态内存
+
+    ZwClose(devInstRegKey);			// 关闭句柄
+    KdPrint(("GetRegisterMouseSensitivity end,%x\n", status));
+    return status;
+
+}
+
+
+void SetNextSensitivity(PHID_MINI_DEV_EXTENSION pDevContext)
+{
+    UCHAR ms_idx = pDevContext->MouseSensitivity_Index;// MouseSensitivity_Normal;//MouseSensitivity_Slow//MouseSensitivity_FAST
+
+    ms_idx++;
+    if (ms_idx == 3) {//灵敏度循环设置
+        ms_idx = 0;
+    }
+
+    //保存注册表灵敏度设置数值
+    NTSTATUS status = SetRegisterMouseSensitivity(pDevContext, ms_idx);//MouseSensitivityTable存储表的序号值
+    if (!NT_SUCCESS(status))
+    {
+        KdPrint(("SetNextSensitivity SetRegisterMouseSensitivity err,%x\n", status));
+        return;
+    }
+
+    pDevContext->MouseSensitivity_Index = ms_idx;
+    pDevContext->MouseSensitivity_Value = MouseSensitivityTable[ms_idx];
+    KdPrint(("SetNextSensitivity pDevContext->MouseSensitivity_Index,%x\n", pDevContext->MouseSensitivity_Index));
+
+    KdPrint(("SetNextSensitivity ok,%x\n", status));
 }

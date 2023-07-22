@@ -47,7 +47,7 @@ const ULONG DEXT_NO_HID_DESC = 0x1;
 
 
 CHAR UnitExponent_Table[16] = { 0,1,2,3,4,5,6,7,-8,-7,-6,-5,-4,-3,-2,1 };
-
+double MouseSensitivityTable[3] = { 0.8,1.0,1.25 };
 
 ///鼠标状态报告,对应的HID是上边的报告
 #pragma pack(1)
@@ -241,6 +241,12 @@ struct _HID_MINI_DEV_EXTENSION
     BOOLEAN bWheelDisabled;//当前滚轮功能开启关闭状态
 
     BOOLEAN bMouseLikeTouchPad_Mode;//切换仿鼠标式触摸板与windows原版的PTP精确式触摸板操作方式
+
+    UCHAR MouseSensitivity_Index;
+    double MouseSensitivity_Value;
+
+    BOOLEAN SensitivityChanged;
+    BOOLEAN ButtonDown;
 
 } HID_MINI_DEV_EXTENSION, * PHID_MINI_DEV_EXTENSION;
 
@@ -934,3 +940,11 @@ ULONG runtimes_ioReadCompletion;
 
 
 VOID KdPrintDataFun(CHAR* pChars, PUCHAR DataBuffer, ULONG DataSize);
+
+
+NTSTATUS SetRegisterMouseSensitivity(PHID_MINI_DEV_EXTENSION pMiniDevExt, ULONG ms_idx);
+
+NTSTATUS GetRegisterMouseSensitivity(PHID_MINI_DEV_EXTENSION pMiniDevExt, ULONG* ms_idx);
+
+void SetNextSensitivity(PHID_MINI_DEV_EXTENSION pDevContext);
+
