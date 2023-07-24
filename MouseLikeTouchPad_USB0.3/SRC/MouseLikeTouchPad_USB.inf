@@ -29,8 +29,8 @@ DefaultDestDir = 12
 %MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\MLTP_USB;//GENERIC_HID_DEVICE,USB\Class_03&SubClass_01,USB\Class_03
 
 %MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_17EF&PID_613A&MI_01;;小新duet2022款
-%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_17EF&PID_60F9&MI_01;;联想Yoga duet
-%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_17EF&PID_60F6&MI_01;;联想Yoga duet
+%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_17EF&PID_60F9&MI_01;;联想Yoga Duet 7 BT Folio
+%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_17EF&PID_60F6&MI_01;;联想Yoga Duet 7 BT Folio
 
 
 ;=====================================================================
