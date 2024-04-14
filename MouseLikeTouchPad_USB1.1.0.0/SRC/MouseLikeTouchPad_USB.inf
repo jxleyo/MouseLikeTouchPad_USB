@@ -1,0 +1,114 @@
+;
+; HidUsb.inf
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=HIDClass
+ClassGuid={745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider    = %ProviderName%
+CatalogFile=MouseLikeTouchPad_USB.cat
+PnpLockdown=1
+DriverVer=05/17/2024,1.0.0.0
+
+
+[SourceDisksFiles]
+MouseLikeTouchPad_USB.sys   = 3426
+
+[SourceDisksNames]
+3426=internets
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%StdMfg%=Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_048D&PID_8911&MI_01;//T7200有线USB触摸板
+%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\MLTP_USB;//GENERIC_HID_DEVICE,USB\Class_03&SubClass_01,USB\Class_03
+
+%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_17EF&PID_613A&MI_01;;//小新duet2022款
+%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_17EF&PID_60F9&MI_01;;//联想Yoga Duet 7 BT Folio
+%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_17EF&PID_60F6&MI_01;;//联想Yoga Duet 7 BT Folio
+%MouseLikeTouchPad_USB.DeviceDesc%=MouseLikeTouchPad_USB, USB\VID_05AC&PID_0265&MI_01;;
+
+
+
+;=====================================================================
+[MouseLikeTouchPad_USB.NT]
+Copyfiles = MouseLikeTouchPad_USB.CopyFiles.NT
+;AddProperty = MouseLikeTouchPad_USB.AddProp.NT
+
+[MouseLikeTouchPad_USB.NT.HW]
+AddReg = MouseLikeTouchPad_USB.AddReg.NT.HW
+DelReg = MouseLikeTouchPad_USB.DelReg.NT.HW
+
+[MouseLikeTouchPad_USB.AddReg.NT.HW]
+; Defaults
+HKR,,"SelectiveSuspendEnabled",0x00000001,0
+HKR,,"EnhancedPowerManagementEnabled",0x00010001,1
+HKR,,"AllowIdleIrpInD3",0x00010001,0x1
+HKR,,"LegacyTouchScaling",0x00010001,0
+
+HKR,,"WriteReportExSupported",0x00010001,0x1
+HKR,,"DeviceResetNotificationEnabled",0x00010001,0;;很关键设置，必须置0，否则设备Reset通知消息导致系统无法处理鼠标和触控板输入事件
+;HKR,,"DoNotWaitForResetResponse",0x00010001,0;
+
+HKR,,"MouseSensitivity_Index",0x00010001,1
+
+; Empty section (only exists to maintain compatibility with external INF files)
+;
+[MouseLikeTouchPad_USB.DelReg.NT.HW]
+; Remove the ExtPropDescSemaphore flag in case it is present from a previous install
+HKR,,"ExtPropDescSemaphore"
+
+
+[MouseLikeTouchPad_USB.CopyFiles.NT]
+MouseLikeTouchPad_USB.sys,,,0x100
+
+[MouseLikeTouchPad_USB.AddProp.NT]
+;GenericDriverInstalled,,,,1
+
+[MouseLikeTouchPad_USB.NT.Services]
+AddService = MouseLikeTouchPad_USB,%SPSVCINST_ASSOCSERVICE%,HID_Service_Inst
+
+;*****************************************
+; Service Installation section
+;*****************************************
+
+[HID_Service_Inst]
+DisplayName    = %MouseLikeTouchPad_USB.SvcDesc%
+ServiceType    = %SERVICE_KERNEL_DRIVER%
+StartType      = %SERVICE_DEMAND_START%
+ErrorControl   = %SERVICE_ERROR_IGNORE%
+ServiceBinary  = %12%\MouseLikeTouchPad_USB.sys
+LoadOrderGroup = extended base
+
+
+
+;*****************************************
+; Strings section
+;*****************************************
+
+[strings]
+; localizable
+ProviderName             = "jxleyo.HRP"
+StdMfg               = "MouseLikeTouchPad_USB"
+MouseLikeTouchPad_USB.DeviceDesc = "MouseLikeTouchPad_USB Device"
+MouseLikeTouchPad_USB.SVCDESC = "MouseLikeTouchPad_USB Service"
+
+; non-localizable
+SPSVCINST_TAGTOFRONT  = 0x00000001
+SPSVCINST_ASSOCSERVICE= 0x00000002
+SERVICE_KERNEL_DRIVER = 1
+SERVICE_BOOT_START    = 0
+SERVICE_SYSTEM_START  = 1
+SERVICE_AUTO_START    = 2
+SERVICE_DEMAND_START  = 3
+SERVICE_ERROR_NORMAL  = 1
+SERVICE_ERROR_IGNORE  = 0
+REG_EXPAND_SZ         = 0x00020000
+REG_DWORD             = 0x00010001
+REG_SZ                = 0x00000000
+
